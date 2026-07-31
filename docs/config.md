@@ -611,7 +611,7 @@ per-pass texel spread
 
 Default: `20`
 
-refresh rate (0-144) of blur under an animated wallpaper; 0 = off, freezing the frost so it stops re-sampling the wallpaper. Camera moves force a refresh regardless.
+cap (0-144) on how often the frost re-samples a background that moves on its own — an animated (`u_time`) shader, or a wallpaper daemon's surface. 0 = never re-sample that motion, so the frost keeps whatever the background looked like when it was captured. Only that motion is capped: panning, zooming, and swapping the background itself (a new wallpaper, a restarted daemon) always refresh, 0 included.
 
 ### `animation_speed`
 
@@ -1251,7 +1251,7 @@ Supported fields:
   - "server":  SSD — driftwm's titlebar
   - "minimal": SSD — no titlebar, just shadow + corners + border (this is the mode for chrome-on-borderless widgets; border_width / corner_radius / shadow rules apply)
   - "none":    bare client surface — compositor adds zero chrome, and per-window border_width / corner_radius / shadow rules are ignored. Use "minimal" if you want chrome without a titlebar.
-- `blur` — true: blur background behind this window (default: false). Real GPU/VRAM cost that does NOT scale down with zoom (a blurred window is processed at full resolution however far you zoom out), so prefer blur on a handful of windows over globally. Results are cached and only recomputed when the content behind the window changes.
+- `blur` — true: blur background behind this window (default: false). Real GPU/VRAM cost, but it tracks the window's size on screen, so zooming out makes a blurred window cheaper, not dearer. Once several blurred windows cover most of the viewport between them the compositor switches to one shared full-screen blur they all sample, so a screenful of frost doesn't multiply the work. Results are cached, and recomputed when the view moves or the content behind the window changes.
 - `opacity` — 0.0–1.0: window transparency (default: 1.0, fully opaque)
 - `border_width` — per-window border width override (px). Set to 0 to disable border on a window even when [decorations] border_width > 0. Ignored for decoration = "none".
 - `border_color` — per-window unfocused border color, "#rrggbb" or "#rrggbbaa" (optional alpha byte), e.g. "#5c5c5c".

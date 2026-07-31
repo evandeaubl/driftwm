@@ -107,7 +107,6 @@ fn pan_viewport_sets_target_instead_of_jumping() {
 fn pan_viewport_converges_and_clears_target() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.skip_baseline_check();
 
     f.state()
         .execute_action(&Action::PanViewport(Direction::Right));
@@ -134,7 +133,6 @@ fn pan_viewport_converges_and_clears_target() {
 fn pan_keeps_pointer_screen_position() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.skip_baseline_check();
 
     let camera_before = f.state().camera();
     let pointer_before = f.state().seat.get_pointer().unwrap().current_location();
@@ -167,7 +165,6 @@ fn pan_keeps_pointer_screen_position() {
 fn zoom_anchor_holds_screen_point() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.skip_baseline_check();
 
     let s = Point::from((960.0, 540.0));
     let camera = Point::from((100.0, 50.0));
@@ -225,7 +222,6 @@ fn zoom_anchor_holds_screen_point() {
 fn zoom_finish_is_coupled() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.skip_baseline_check();
 
     let s = Point::from((960.0, 540.0));
     let camera = Point::from((100.0, 50.0));
@@ -280,7 +276,6 @@ fn zoom_finish_is_coupled() {
 fn zoom_action_anchors_at_viewport_center() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    f.skip_baseline_check();
 
     let camera = f.state().camera();
     let zoom = f.state().zoom();
@@ -349,7 +344,6 @@ fn configure_trace(
 /// Map one 400x300 client at canvas (400, 300) on a single output, viewport at
 /// the origin — the shared fixture for the grab-versus-camera scenarios.
 fn one_window(f: &mut Fixture) -> (ClientId, wayland_client::protocol::wl_surface::WlSurface) {
-    f.skip_baseline_check();
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     let surface = map_window(f, id, "a", (400, 300));
@@ -513,7 +507,6 @@ fn starting_a_stand_in_resize_ends_the_camera_flight() {
     )
     .unwrap();
     let mut f = Fixture::with_config(config);
-    f.skip_baseline_check();
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
     let sid = f.state().insert_suspended_for_test(
@@ -555,7 +548,6 @@ fn starting_a_stand_in_resize_ends_the_camera_flight() {
 #[test]
 fn a_grab_install_ends_the_camera_flight_on_every_output() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out1 = f.add_output(1, (1920, 1080));
     let out2 = f.add_output(2, (1280, 720));
     let id = f.add_client();
@@ -606,7 +598,6 @@ fn a_grab_install_ends_the_camera_flight_on_every_output() {
 #[test]
 fn edge_pan_still_drives_the_camera_under_a_live_move_grab() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out = f.add_output(1, (1920, 1080));
     let id = f.add_client();
     map_window(&mut f, id, "a", (400, 300));
@@ -766,7 +757,6 @@ fn a_camera_flight_armed_after_a_pinned_resize_grab_does_not_resize_the_window()
     )
     .unwrap();
     let mut f = Fixture::with_config(config);
-    f.skip_baseline_check();
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     let surface = map_window(&mut f, id, "a", (400, 300));
@@ -879,7 +869,6 @@ fn coasting(output: &smithay::output::Output) -> bool {
 #[test]
 fn a_pan_burst_arms_the_momentum_timer_once() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
 
@@ -912,7 +901,6 @@ fn a_pan_burst_arms_the_momentum_timer_once() {
 #[test]
 fn the_momentum_timer_fires_once_and_a_later_pan_re_arms_it() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out = f.add_output(1, (1920, 1080));
     origin_view(&mut f);
 
@@ -957,7 +945,6 @@ fn the_momentum_timer_fires_once_and_a_later_pan_re_arms_it() {
 #[test]
 fn a_pan_on_an_inactive_output_auto_launches_momentum_there() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out1 = f.add_output(1, (1920, 1080));
     let out2 = f.add_output(2, (1280, 720));
     assert_eq!(
@@ -983,7 +970,6 @@ fn a_pan_on_an_inactive_output_auto_launches_momentum_there() {
 #[test]
 fn an_explicit_launch_leaves_the_armed_timer_to_collect_itself() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out = f.add_output(1, (1920, 1080));
     origin_view(&mut f);
 
@@ -1014,7 +1000,6 @@ fn an_explicit_launch_leaves_the_armed_timer_to_collect_itself() {
 #[test]
 fn cancelling_one_output_leaves_anothers_pending_launch_armed() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out1 = f.add_output(1, (1920, 1080));
     let out2 = f.add_output(2, (1280, 720));
 
@@ -1050,7 +1035,6 @@ fn cancelling_one_output_leaves_anothers_pending_launch_armed() {
 #[test]
 fn launching_one_output_leaves_anothers_pending_launch_armed() {
     let mut f = Fixture::new();
-    f.skip_baseline_check();
     let out1 = f.add_output(1, (1920, 1080));
     let out2 = f.add_output(2, (1280, 720));
     assert_eq!(

@@ -36,9 +36,6 @@ fn one_window(
     wayland_client::protocol::wl_surface::WlSurface,
 ) {
     f.add_output(1, (1920, 1080));
-    // Camera writes seed a per-output blur generation that only clears on output
-    // disconnect, so these scenarios can't return to the pre-output baseline.
-    f.skip_baseline_check();
     let id = f.add_client();
     let surface = map_window(f, id, "w", (600, 400));
     let window = window_by_app_id(f, "w").unwrap();

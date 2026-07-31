@@ -67,6 +67,9 @@ pub fn init_winit(
         data.render.blur_down_shader = blur_down;
         data.render.blur_up_shader = blur_up;
         data.render.blur_mask_shader = blur_mask;
+        // The blur's wrap mode is a property of the GL context, and this is a
+        // new one.
+        data.render.blur_wrap_mode = None;
         data.backend = Some(backend);
     }
 

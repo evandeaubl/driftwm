@@ -1311,6 +1311,10 @@ impl DriftWm {
             ("pending_mode_changes", self.pending_mode_changes.len()),
             ("blur_cache", self.render.blur_cache.len()),
             ("shared_blur", self.render.shared_blur.len()),
+            (
+                "blur_scratch",
+                self.render.blur_scratch.values().map(|p| p.len()).sum(),
+            ),
             ("shadow_cache", self.render.shadow_cache.len()),
             ("border_cache", self.render.border_cache.len()),
             ("cached_bg", self.render.cached_bg.len()),
@@ -1321,10 +1325,7 @@ impl DriftWm {
                 self.render.cached_shader_chunks.len(),
             ),
             ("cached_error_bar", self.render.cached_error_bar.len()),
-            (
-                "blur_camera_generation",
-                self.render.blur_camera_generation.len(),
-            ),
+            ("cached_outlines", self.render.cached_outlines.len()),
             (
                 "background_last_animate",
                 self.render.background_last_animate.len(),

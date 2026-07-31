@@ -18,7 +18,7 @@ mod tile_worker;
 
 pub use background::{BackgroundElement, init_background, update_background_element};
 pub(crate) use blur::compile_blur_shaders;
-pub use blur::{BlurCache, SharedBlur};
+pub use blur::{BlurCache, BlurScratchPool, SharedBlur};
 pub use capture::{render_capture_frames, render_screencopy, render_toplevel_captures};
 pub(crate) use closing::{
     BakeChrome, CloseChrome, ClosePixels, ClosingSnapshot, ResizeCaptures, ResizeCrossfade,
@@ -112,6 +112,8 @@ impl WindowRenderAnimation {
         )
     }
 }
+
+use std::collections::HashMap;
 
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::{
@@ -707,6 +709,13 @@ pub fn compose_frame(
     }
 
     if state.session_lock.renders_lock_frame() {
+        // No blur draws in a lock frame, and the eviction sweep that frees it
+        // sits past this return — so a lock would otherwise hold every blurred
+        // window's textures and the shared backdrop for its whole duration,
+        // which can be hours. Per output, like the sweep: this frame speaks
+        // only for its own output. The re-warm on unlock is the first-frame
+        // staging `force_dirty_frames` already covers.
+        state.render.remove_blur_caches(&output.name());
         return compose_lock_frame(state, renderer, output, cursor_elements);
     }
 
@@ -1462,6 +1471,9 @@ pub fn compose_frame(
                     screen_rect,
                     elem_start,
                     elem_count,
+                    // Measured, not derived from the config: the shadow only
+                    // pushes when its shader compiled.
+                    trailing_chrome: shadow_count,
                     // Must follow the bucket the elements went into, since the
                     // blur splices by that bucket's prefix offset. The tag also
                     // marks a layer as screen-fixed, so its blur recomputes on
@@ -1707,6 +1719,8 @@ pub fn compose_frame(
             renderer,
             output,
             output_scale,
+            camera,
+            zoom,
             &mut all_elements,
             &all_blur_requests,
             overlay_prefix,
@@ -1730,6 +1744,14 @@ pub fn compose_frame(
             .render
             .blur_cache
             .retain(|(out, id), _| out != &name || active_ids.contains(id));
+        if active_ids.is_empty() {
+            // The shared backdrop's two output-sized textures and the scratch
+            // pool, with nothing left to sample or pace them.
+            // `process_blur_requests` — the only other place that frees them —
+            // never runs on a frame without requests, so they would strand here
+            // until the output went away.
+            state.render.remove_blur_caches(&name);
+        }
     }
 
     // Error bar sits above every window and layer-shell surface but below the
@@ -1743,9 +1765,70 @@ pub fn compose_frame(
     all_elements
 }
 
+/// Identifies an outline strip buffer by everything that decides its *content*:
+/// the configured colour and the clipped strip extent. Position is deliberately
+/// absent — it belongs to the render element, and keying on it would mint a
+/// fresh buffer (hence a fresh element `Id`) on every frame of a camera pan.
+pub type OutlineBufferKey = ([u8; 4], i32, i32);
+
+/// The visible parts of an outline's four edges, clipped to the viewport.
+/// Edges that fall entirely outside it are dropped.
+fn outline_edge_strips(
+    outline: Rectangle<i32, Logical>,
+    viewport_size: Size<i32, Logical>,
+    thickness: i32,
+) -> impl Iterator<Item = Rectangle<i32, Logical>> {
+    let (loc, size) = (outline.loc, outline.size);
+    let edges = [
+        Rectangle::new(loc, Size::from((size.w, thickness))),
+        Rectangle::new(
+            Point::from((loc.x, loc.y + size.h - thickness)),
+            Size::from((size.w, thickness)),
+        ),
+        Rectangle::new(loc, Size::from((thickness, size.h))),
+        Rectangle::new(
+            Point::from((loc.x + size.w - thickness, loc.y)),
+            Size::from((thickness, size.h)),
+        ),
+    ];
+    let viewport = Rectangle::from_size(viewport_size);
+    edges
+        .into_iter()
+        .filter_map(move |e| e.intersection(viewport))
+}
+
+/// The solid-colour buffer for one outline strip, reused across frames.
+///
+/// `MemoryRenderBuffer::from_slice` mints a fresh `Id`, which the render element
+/// inherits — rebuilding per frame therefore re-damages every outline every
+/// frame and makes the blur's background hash differ every frame.
+fn outline_buffer(
+    cache: &mut HashMap<OutlineBufferKey, MemoryRenderBuffer>,
+    color: [u8; 4],
+    strip: Rectangle<i32, Logical>,
+) -> &MemoryRenderBuffer {
+    let (w, h) = (strip.size.w, strip.size.h);
+    cache.entry((color, w, h)).or_insert_with(|| {
+        let pixels: Vec<u8> = vec![color[0], color[1], color[2], color[3]]
+            .into_iter()
+            .cycle()
+            .take((w * h) as usize * 4)
+            .collect();
+
+        MemoryRenderBuffer::from_slice(
+            &pixels,
+            Fourcc::Abgr8888,
+            (w, h),
+            1,
+            Transform::Normal,
+            None,
+        )
+    })
+}
+
 /// Thin outlines showing where other monitors' viewports sit on the canvas.
 fn build_output_outline_elements(
-    state: &crate::state::DriftWm,
+    state: &mut crate::state::DriftWm,
     renderer: &mut GlesRenderer,
     output: &Output,
     camera: Point<f64, Logical>,
@@ -1753,18 +1836,16 @@ fn build_output_outline_elements(
     viewport_size: Size<i32, Logical>,
 ) -> Vec<OutputRenderElements> {
     let thickness = state.config.output_outline.thickness;
-    if thickness <= 0 {
+    let opacity = state.config.output_outline.opacity as f32;
+    if thickness <= 0 || opacity <= 0.0 {
+        state.render.cached_outlines.remove(&output.name());
         return vec![];
     }
 
-    let opacity = state.config.output_outline.opacity as f32;
-    if opacity <= 0.0 {
-        return vec![];
-    }
     let color = state.config.output_outline.color;
     let scale = output.current_scale().fractional_scale();
 
-    let mut elements = Vec::new();
+    let mut strips: Vec<Rectangle<i32, Logical>> = Vec::new();
 
     for other in state.space.outputs() {
         if *other == *output {
@@ -1797,70 +1878,44 @@ fn build_output_outline_elements(
             continue;
         }
 
-        let edges: [(i32, i32, i32, i32); 4] = [
-            (screen_x, screen_y, screen_w, thickness), // top
-            (
-                screen_x,
-                screen_y + screen_h - thickness,
-                screen_w,
-                thickness,
-            ), // bottom
-            (screen_x, screen_y, thickness, screen_h), // left
-            (
-                screen_x + screen_w - thickness,
-                screen_y,
-                thickness,
-                screen_h,
-            ), // right
-        ];
+        strips.extend(outline_edge_strips(outline_rect, viewport_size, thickness));
+    }
 
-        for (ex, ey, ew, eh) in edges {
-            let x0 = ex.max(0);
-            let y0 = ey.max(0);
-            let x1 = (ex + ew).min(viewport_size.w);
-            let y1 = (ey + eh).min(viewport_size.h);
-            if x1 <= x0 || y1 <= y0 {
-                continue;
-            }
+    let cache = state
+        .render
+        .cached_outlines
+        .entry(output.name())
+        .or_default();
+    let mut elements = Vec::with_capacity(strips.len());
+    let mut live: Vec<OutlineBufferKey> = Vec::with_capacity(strips.len());
 
-            let w = x1 - x0;
-            let h = y1 - y0;
+    for strip in strips {
+        live.push((color, strip.size.w, strip.size.h));
+        let buf = outline_buffer(cache, color, strip);
 
-            let pixels: Vec<u8> = vec![color[0], color[1], color[2], color[3]]
-                .into_iter()
-                .cycle()
-                .take((w * h) as usize * 4)
-                .collect();
-
-            let buf = MemoryRenderBuffer::from_slice(
-                &pixels,
-                Fourcc::Abgr8888,
-                (w, h),
-                1,
-                Transform::Normal,
-                None,
-            );
-
-            let loc: Point<f64, Physical> = Point::from((x0, y0)).to_f64().to_physical(scale);
-            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
-                renderer,
-                loc,
-                &buf,
-                Some(opacity),
-                None,
-                None,
-                Kind::Unspecified,
-            ) {
-                elements.push(OutputRenderElements::Decoration(
-                    PixelSnapRescaleElement::from_element(
-                        elem,
-                        Point::<i32, Physical>::from((0, 0)),
-                        1.0,
-                    ),
-                ));
-            }
+        let loc: Point<f64, Physical> = strip.loc.to_f64().to_physical(scale);
+        if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            loc,
+            buf,
+            Some(opacity),
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            elements.push(OutputRenderElements::Decoration(
+                PixelSnapRescaleElement::from_element(
+                    elem,
+                    Point::<i32, Physical>::from((0, 0)),
+                    1.0,
+                ),
+            ));
         }
     }
+
+    // A strip clipped by the viewport changes extent as the camera pans, so
+    // without a prune the cache would grow one entry per pixel of travel.
+    cache.retain(|key, _| live.contains(key));
 
     elements
 }
@@ -1900,5 +1955,113 @@ mod texel_src_tests {
         let src = texel_src(texels);
         assert_eq!(src.size.w, 1200.0);
         assert_eq!(src.size.h, 900.0);
+    }
+}
+
+#[cfg(test)]
+mod outline_cache_tests {
+    use super::*;
+
+    const WHITE: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFF];
+
+    fn strips(
+        outline: Rectangle<i32, Logical>,
+        viewport: Size<i32, Logical>,
+    ) -> Vec<Rectangle<i32, Logical>> {
+        outline_edge_strips(outline, viewport, 1).collect()
+    }
+
+    #[test]
+    fn a_fully_visible_outline_yields_four_edges() {
+        let viewport = Size::from((1920, 1080));
+        let outline = Rectangle::new(Point::from((100, 200)), Size::from((400, 300)));
+
+        let edges = strips(outline, viewport);
+        assert_eq!(edges.len(), 4);
+        assert_eq!(
+            edges[0],
+            Rectangle::new(Point::from((100, 200)), Size::from((400, 1)))
+        );
+        assert_eq!(
+            edges[1],
+            Rectangle::new(Point::from((100, 499)), Size::from((400, 1)))
+        );
+        assert_eq!(
+            edges[2],
+            Rectangle::new(Point::from((100, 200)), Size::from((1, 300)))
+        );
+        assert_eq!(
+            edges[3],
+            Rectangle::new(Point::from((499, 200)), Size::from((1, 300)))
+        );
+    }
+
+    #[test]
+    fn edges_are_clipped_to_the_viewport_and_offscreen_ones_dropped() {
+        let viewport = Size::from((1920, 1080));
+        // Hangs off the left edge: the left edge is gone entirely, the
+        // horizontal ones survive as their visible remainder.
+        let outline = Rectangle::new(Point::from((-50, 200)), Size::from((400, 300)));
+
+        let edges = strips(outline, viewport);
+        assert_eq!(edges.len(), 3);
+        assert_eq!(
+            edges[0],
+            Rectangle::new(Point::from((0, 200)), Size::from((350, 1)))
+        );
+        assert_eq!(
+            edges[1],
+            Rectangle::new(Point::from((0, 499)), Size::from((350, 1)))
+        );
+        assert_eq!(
+            edges[2],
+            Rectangle::new(Point::from((349, 200)), Size::from((1, 300)))
+        );
+    }
+
+    /// The reason the cache key excludes position: panning moves every strip
+    /// but changes no strip's extent, so the buffers — and with them the
+    /// element `Id`s the blur hashes — must survive the pan.
+    #[test]
+    fn panning_a_visible_outline_reuses_every_buffer() {
+        let viewport = Size::from((1920, 1080));
+        let mut cache = HashMap::new();
+
+        for offset in 0..20 {
+            let outline = Rectangle::new(
+                Point::from((100 + offset, 200 + offset)),
+                Size::from((400, 300)),
+            );
+            for strip in strips(outline, viewport) {
+                outline_buffer(&mut cache, WHITE, strip);
+            }
+        }
+
+        assert_eq!(
+            cache.len(),
+            2,
+            "one buffer per distinct extent: the horizontal pair and the vertical pair"
+        );
+    }
+
+    #[test]
+    fn a_different_extent_or_colour_gets_its_own_buffer() {
+        let mut cache = HashMap::new();
+        let strip = Rectangle::new(Point::from((0, 0)), Size::from((400, 1)));
+
+        outline_buffer(&mut cache, WHITE, strip);
+        outline_buffer(
+            &mut cache,
+            WHITE,
+            Rectangle::new(Point::from((0, 0)), Size::from((399, 1))),
+        );
+        assert_eq!(cache.len(), 2, "a clipped strip is a different buffer");
+
+        outline_buffer(&mut cache, [0, 0, 0, 0xFF], strip);
+        assert_eq!(
+            cache.len(),
+            3,
+            "colour is baked into the pixels, so it keys"
+        );
     }
 }

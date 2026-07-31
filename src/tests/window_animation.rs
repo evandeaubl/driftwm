@@ -49,12 +49,8 @@ fn dist(a: Point<f64, Logical>, b: Point<f64, Logical>) -> f64 {
 }
 
 /// Active output at camera origin, zoom 1, with every camera animation quieted so
-/// `output_has_active_animations` reflects only window animations. Moving/syncing
-/// the camera populates the per-output `blur_camera_generation` map (which only
-/// drains on output disconnect), so any caller ends off-baseline — opt out, the
-/// same way the camera-animation suite does.
+/// `output_has_active_animations` reflects only window animations.
 fn reset_view(f: &mut Fixture) {
-    f.skip_baseline_check();
     f.state().with_output_state(|os| {
         os.camera = Point::from((0.0, 0.0));
         os.zoom = 1.0;
@@ -660,9 +656,6 @@ fn pinned_entry_chases_in_screen_space_and_survives_a_pan() {
         Config::from_toml("[[window_rules]]\napp_id = \"p\"\npinned_to_screen = true\n").unwrap(),
     );
     let output = f.add_output(1, (1920, 1080));
-    // Panning the camera below populates blur_camera_generation (drains only on
-    // output disconnect) — end off-baseline like the camera-animation suite.
-    f.skip_baseline_check();
     let id = f.add_client();
     let surface = map_window(&mut f, id, "p", (400, 300));
     let window = window_by_app_id(&mut f, "p").unwrap();
@@ -1160,8 +1153,6 @@ fn per_output_predicate_scopes_to_the_intersecting_output() {
     let mut f = Fixture::new();
     let out1 = f.add_output(1, (1920, 1080));
     let out2 = f.add_output(2, (1280, 720));
-    // Camera writes below populate blur_camera_generation — end off-baseline.
-    f.skip_baseline_check();
     let id = f.add_client();
     map_window(&mut f, id, "a", (400, 300));
     let window = window_by_app_id(&mut f, "a").unwrap();
@@ -3914,6 +3905,9 @@ fn a_stand_in_drag_ends_the_entry_it_fights() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),
@@ -4235,6 +4229,9 @@ fn a_move_motion_that_does_not_move_the_window_leaves_the_entry_alone() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),
@@ -5087,6 +5084,9 @@ fn a_snapped_fit_slides_a_stand_in_cluster_member_and_lands_it_at_its_stage_posi
     let psurface = map_window(&mut f, id, "primary", (300, 300));
     let primary = window_by_app_id(&mut f, "primary").unwrap();
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     f.state()
         .map_window(primary.clone(), Point::from((400, 300)), false);
     let peid = element_id(&mut f, &primary);
@@ -5148,6 +5148,9 @@ fn a_stand_ins_slide_is_not_culled_when_its_target_leaves_every_viewport() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),
@@ -5184,6 +5187,9 @@ fn a_dismissed_stand_in_departs_from_its_mid_slide_picture_not_its_destination()
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),
@@ -5288,6 +5294,9 @@ fn no_entry_starts_on_a_stand_in_under_an_interactive_grab() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),

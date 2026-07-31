@@ -502,16 +502,6 @@ impl DriftWm {
             let cam = output_state(&output).camera.to_i32_round();
             if self.space.output_geometry(&output).map(|g| g.loc) != Some(cam) {
                 changed = true;
-                // Per-output bump: a shared blur only refreshes off-throttle for
-                // the output whose camera actually moved, not every output.
-                *self
-                    .render
-                    .blur_camera_generation
-                    .entry(output.name())
-                    .or_insert(0) += 1;
-                self.render
-                    .blur_camera_moved_at
-                    .insert(output.name(), std::time::Instant::now());
             }
             self.space.map_output(&output, cam);
         }

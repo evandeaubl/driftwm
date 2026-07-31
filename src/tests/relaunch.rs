@@ -2730,10 +2730,6 @@ fn center_window_never_flies_the_camera_to_a_hidden_adopt() {
     f.add_output(1, (1920, 1080));
     inject_cache(&mut f, &tmp, &["myapp"]);
     origin_view(&mut f);
-    // The flight below pans the camera, which populates blur_camera_generation
-    // (it drains only on output disconnect) — end off-baseline like the
-    // camera-animation suite.
-    f.skip_baseline_check();
 
     let sid = insert_suspended(&mut f, 1, "myapp", (5000, 5000), (400, 300));
     let cid = f.add_client();
@@ -3596,8 +3592,6 @@ fn an_activation_for_a_hidden_adopt_moves_neither_the_camera_nor_the_keyboard() 
     let mut f = Fixture::with_config(Config::default());
     let output = f.add_output(1, (1920, 1080));
     inject_cache(&mut f, &tmp, &["myapp"]);
-    // The honored activation below pans, which populates blur_camera_generation.
-    f.skip_baseline_check();
 
     let fs = f.add_client();
     let fs_surface = map_window(&mut f, fs, "fs", (400, 300));

@@ -20,7 +20,9 @@ use super::elements::OutputRenderElements;
 /// Push compositor chrome (corner clip on surface, border, shadow) for one
 /// layer surface, plus any popup elements anchored to it. Returns the number
 /// of render elements emitted *above* the eventual blur insertion point
-/// (popups + surface). Border and shadow push after that and are not counted.
+/// (popups + surface), then the number pushed below it (border, shadow) —
+/// counted rather than derived from the rule, because both only push when
+/// their shader compiled.
 ///
 /// Popups push first (z-order above the surface) and are *not* corner-clipped
 /// — they can legitimately extend outside the parent's geometry (tray menus,
@@ -48,7 +50,7 @@ fn push_layer_chrome(
         &mut Vec<OutputRenderElements>,
         Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
     ),
-) -> usize {
+) -> (usize, usize) {
     // Layer-shell surfaces don't have a decoration mode (no titlebar, no
     // SSD/CSD distinction). The `decoration` field is ignored on layer rules;
     // chrome is opt-in field-by-field. `[decorations]` values are NOT
@@ -139,7 +141,7 @@ fn push_layer_chrome(
         );
     }
 
-    chrome_count
+    (chrome_count, target.len() - chrome_start - chrome_count)
 }
 
 /// Walk popups attached to the layer surface and produce render elements at
@@ -324,7 +326,7 @@ pub(super) fn build_layer_elements(
         );
 
         let elem_start = elements.len();
-        let chrome_count = push_layer_chrome(
+        let (chrome_count, trailing_chrome) = push_layer_chrome(
             &mut elements,
             state,
             applied.as_ref(),
@@ -385,6 +387,7 @@ pub(super) fn build_layer_elements(
                         screen_rect,
                         elem_start,
                         elem_count: chrome_count,
+                        trailing_chrome,
                         layer: layer_tag,
                         region_rects,
                     });

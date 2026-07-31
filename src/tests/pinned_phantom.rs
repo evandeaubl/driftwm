@@ -359,10 +359,6 @@ fn binding_context_in_the_phantom_band_is_on_canvas() {
 fn binding_context_in_the_phantom_band_is_on_canvas_after_a_resync() {
     let mut f = Fixture::with_config(config(PIN_RULE));
     f.add_output(1, (1920, 1080));
-    // The resync below pans the camera, which populates blur_camera_generation
-    // (it drains only on output disconnect) — end off-baseline like the
-    // camera-animation suite.
-    f.skip_baseline_check();
     let id = f.add_client();
     let (pin, site, _) = pin_then_zoom(&mut f, id);
     resync_pins(&mut f);
@@ -444,10 +440,6 @@ fn a_click_in_the_phantom_band_focuses_the_window_really_there() {
 fn a_click_in_the_phantom_band_focuses_the_window_really_there_after_a_resync() {
     let mut f = Fixture::with_config(config(PIN_RULE));
     f.add_output(1, (1920, 1080));
-    // The resync below pans the camera, which populates blur_camera_generation
-    // (it drains only on output disconnect) — end off-baseline like the
-    // camera-animation suite.
-    f.skip_baseline_check();
     let id = f.add_client();
     let (pin, site, _) = pin_then_zoom(&mut f, id);
     resync_pins(&mut f);

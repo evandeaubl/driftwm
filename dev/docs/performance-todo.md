@@ -1,39 +1,12 @@
 # Performance — remaining work
 
-The B1–B14 perf push shipped (see `git log`). What's left, in priority order.
-Line numbers predate the push — re-verify on pickup. Profiling tooling:
-[profiling.md](profiling.md).
+The B1–B14 perf push shipped (see `git log`), and so has the blur cluster it
+deferred (B5b, S1, B12). Nothing substantive is left — what follows is
+opportunistic. Line numbers predate the push — re-verify on pickup. Profiling
+tooling: [profiling.md](profiling.md).
 
 Non-perf items live at the bottom under
 [Correctness backlog](#correctness-backlog).
-
-## Blur (B5b + S1)
-
-The only substantive perf work left; deferred behind touchscreen + session
-restoration (GH #125). The rest of the original blur cluster has since shipped:
-B5's multi-output cache churn (the cache is keyed per `(output, surface)` now),
-the edge-fade artifact (padded crop + mirrored edge sampling), and the fullscreen
-occlusion-cull (the window loop skips occluded windows before they can even
-enqueue a blur request).
-
-**B5b — `blur_bg_fbo` single slot.** `src/render/blur.rs` — one slot keyed by
-size; different-sized outputs evict each other per frame (~33 MB alloc/free at
-4K). Fix: key per output name, free in `remove_output` — `state/render_cache.rs`
-clears every other blur cache there but not this one. Also drop the slot when no
-blur requests remain: `process_blur_requests` only runs when requests exist, so
-after the last blurred window closes nothing is left to free it.
-
-**S1 — blur fully recomputes every frame of a pan _or zoom_.** The cache hash
-includes the window's screen-space position (`src/render/blur.rs` hashes
-`window_rect.loc`), so any camera motion marks every blurred window dirty every
-frame: full-output offscreen FBO repaint, padded crop, 2×radius Kawase passes, a
-second full render for the alpha mask, masking pass. Zoom additionally changes
-`win_size`, reallocating the cache textures on top. The one mitigation in place —
-the pan-in-flight hold — is gated on `animated_bg && occluded_by_lower`, so a
-canvas window over a static wallpaper still pays full price every frame.
-Fix options: translate the cached blur texture by the camera delta during
-camera-only motion (blur is low-frequency); recompute at half rate while panning;
-or key on (quantized position, behind-element commits).
 
 ## Lower-priority backlog (do only if a profile flags it)
 
@@ -41,9 +14,6 @@ or key on (quantized position, behind-element commits).
   blobs upload regardless of visibility and back up during fast pans
   (`src/render/tile_worker.rs`, `tile_chunks.rs`). Cancel unwanted requests; drop
   off-viewport responses; bound the queue. _Gigapixel-TIFF-wallpaper path only._
-- **B12** Output-outline strips rebuild pixel Vecs + `MemoryRenderBuffer` + fresh
-  element ids per edge per frame (`src/render/mod.rs`), defeating damage tracking.
-  _Multi-monitor only._ Cache per (output, color, size).
 - **B13 / B15** Held repeatable key (`src/backend/udev.rs`) and the exec loading
   cursor (`src/input/actions.rs`, up to 5 s/launch) mark _all_ outputs dirty at
   refresh rate. Mark only the active/cursor output. _Single-output-marginal — same
