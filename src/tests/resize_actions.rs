@@ -782,7 +782,9 @@ fn a_stand_in_shrink_stops_at_the_chrome_floor() {
         "a stand-in's canvas rect is durable session state"
     );
 
-    // Cancels the debounce timer the mark armed; `debug_counters` has no entry
-    // for event-loop timers, so the teardown baseline would not catch one.
+    // The dismiss clears the stand-in; the flush cancels the debounce timer the
+    // mark armed, and `debug_counters` has no entry for event-loop timers, so
+    // the teardown baseline would not catch one.
     f.state().dismiss_suspended(sid);
+    f.state().session_store_write_now();
 }

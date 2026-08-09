@@ -94,6 +94,12 @@ Escape hatches, for closes you want to stay real closes:
 > crashing from it quitting cleanly. With `suspend_on_close` on, a crashed
 > app's window and position survive, and `Enter` brings it right back.
 
+A logout is the exception. It kills every client at once, which looks like a
+mass close, but those stand-ins never reach the saved file — the session that
+comes back is the rolling save from before the logout. So a window closed at
+logout returns only if `restore_windows` covers it, not because
+`suspend_on_close` is on.
+
 ## `restore_windows`
 
 ```toml
@@ -101,12 +107,17 @@ Escape hatches, for closes you want to stay real closes:
 restore_windows = true
 ```
 
-On a graceful shutdown — `quit`/`Super+Ctrl+Shift+Q` or a logout that sends
-SIGTERM/SIGHUP — every eligible live window is saved. On the next launch they
-come back as dormant suspended windows at the positions they were at; nothing
-auto-launches, you relaunch each one same as any other suspended window (or
-leave it be). A `kill -9`, a crash, or unplugging the machine skips the save
-entirely.
+Every eligible open window is saved as you go, about a second after the canvas
+last changed. On the next launch they come back as dormant suspended windows at
+the positions they were at; nothing auto-launches, you relaunch each one same as
+any other suspended window (or leave it be).
+
+Nothing extra is saved when the compositor exits, so a logout, a `kill -9` and a
+crash all restore whatever that rolling save last held — up to about a second of
+window motion can be lost. Losing power is the one case that can cost more than
+that second: the file is never forced to disk, so a cut at the wrong moment can
+leave it half-written, and a file that no longer parses is set aside at startup
+and the session starts empty.
 
 Suspended windows themselves are **always** saved and restored, regardless of
 this flag; `restore_windows` only decides whether still-_open_ windows are
@@ -171,9 +182,10 @@ seeds fill the names the save lacks. Like the camera flag, it's read at launch.
 ## The session file
 
 The session lives at `~/.local/state/driftwm/session.json` (respects
-`XDG_STATE_HOME`). It's written through immediately on anything you'd notice
-(suspending, dismissing, relaunching) and debounced (~1s) for continuous
-changes like dragging a suspended window. A file written by an older driftwm is
+`XDG_STATE_HOME`). Every change that belongs in it — suspending, dismissing,
+relaunching, moving, resizing, panning — queues a write that lands ~1s later, so
+a drag or a continuous pan costs one write per second rather than one per
+frame. A file written by an older driftwm is
 read and converted in place; one from a *newer* version, or that fails to parse
 or can't be read at all, is quarantined next to it as
 `session.json.corrupt.<timestamp>` or `session.json.unreadable.<timestamp>`,

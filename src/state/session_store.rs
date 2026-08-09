@@ -2,13 +2,15 @@
 //! an envelope from live state, write it through the [`driftwm::session`] IO,
 //! and materialize it back into suspended windows at startup.
 //!
-//! Cadence: a create, dismiss, or settled move/resize arms a short debounce
-//! timer that writes live and suspended windows together; graceful shutdown
-//! fsync's a final write. Writing live windows at steady state (not just at
-//! shutdown) keeps the file current across a crash or SIGKILL, and makes the
-//! shutdown write a last safety net instead of the sole source of truth —
-//! otherwise a logout that dispatches client teardown before the final
-//! serialize records an empty session (the windows were already unmapped).
+//! Cadence: every durable change — a create, dismiss, adopt, settled
+//! move/resize, viewport motion — arms a short debounce timer, and that timer's
+//! flush is the only writer. Nothing writes at shutdown, deliberately: a logout
+//! SIGTERMs the compositor and its clients together, so client teardown
+//! dispatches in the same event-loop batch that stops the loop and any rebuild
+//! from there serializes a stage that is already draining (see
+//! [`DriftWm::session_store_mark_dirty`]). The costs are a tail of up to
+//! [`WRITE_DEBOUNCE`], and no fsync — a power cut can lose the last write,
+//! while a crash or SIGKILL cannot, since the page cache outlives the process.
 //! Suspended windows are saved regardless of `restore_windows`; a live window
 //! is saved as a `Quit` record when that flag resolves on for it (global
 //! default or a per-app rule). `path == None` disables everything (a
@@ -259,19 +261,31 @@ impl DriftWm {
         merge_saved_cameras(durable, super::read_all_per_output_state())
     }
 
-    /// Immediate write for a create/dismiss: cancel any pending debounce and
-    /// flush now, so a user-visible change is durable at once.
+    /// Cancel a pending debounce and flush now. Test-only on purpose: a
+    /// synchronous rebuild is exactly what [`DriftWm::session_store_mark_dirty`]
+    /// exists to avoid, so gating this keeps production unable to name a
+    /// synchronous writer at all. The fixture needs one because the debounce is
+    /// a real 1s calloop timer with no injectable clock.
+    #[cfg(test)]
     pub fn session_store_write_now(&mut self) {
         if self.session_store.path.is_none() {
             return;
         }
-        if let Some(token) = self.session_store.timer.take() {
-            self.loop_handle.remove(token);
-        }
+        self.session_store_cancel_debounce();
         self.session_store_flush();
     }
 
-    /// Whether a change is waiting on the debounce timer. Both write paths write
+    /// Drop a pending debounced write without running it. The signal handler
+    /// does this before stopping the loop: an expired timer is dispatched after
+    /// the batch's fd events, so a debounce that comes due alongside SIGTERM
+    /// would flush from a stage the client disconnects had already drained.
+    pub(crate) fn session_store_cancel_debounce(&mut self) {
+        if let Some(token) = self.session_store.timer.take() {
+            self.loop_handle.remove(token);
+        }
+    }
+
+    /// Whether a change is waiting on the debounce timer. The flush writes
     /// unconditionally, so an armed debounce has no other seam to observe short
     /// of waiting out the wall-clock second.
     #[cfg(test)]
@@ -279,8 +293,18 @@ impl DriftWm {
         self.session_store.dirty
     }
 
-    /// Arm the debounced write for a move/resize: a one-shot ~1s timer coalesces
-    /// a drag's stream of position/size updates into a single write.
+    /// Arm the debounced write: a one-shot ~1s timer coalesces a drag's stream
+    /// of position/size updates into a single write. The universal way to queue
+    /// a durable change, and the only one production has.
+    ///
+    /// Nothing may rebuild the envelope synchronously from a handler. calloop
+    /// checks the loop's stop flag only after dispatching a whole batch of
+    /// ready events, so a logout's client disconnects — which walk
+    /// `toplevel_destroyed` → `unmap_window` → `stage.remove` — land in the same
+    /// batch as the signal that stops us, in an order nothing controls. A
+    /// rebuild reached from any of them writes a half-drained stage over a file
+    /// that was correct. Arming instead is safe: the debounce either comes due
+    /// before the teardown batch or never runs at all.
     pub fn session_store_mark_dirty(&mut self) {
         if self.session_store.path.is_none() {
             return;
@@ -356,32 +380,25 @@ impl DriftWm {
         }
     }
 
-    /// Flush the durable session at graceful shutdown (keybind quit or
-    /// SIGTERM/SIGHUP), fsync'd. Suspended windows are always saved; a live
-    /// window is added as a `Quit` record when `restore_windows` resolves on for
-    /// it — per-window, not a global gate, so a rule can opt an app in while the
-    /// section key is off, or out while it's on.
-    pub fn serialize_session_on_shutdown(&mut self) {
-        if self.session_store.path.is_none() {
-            return;
-        }
-        self.write_session(true, true);
-    }
-
-    /// Steady-state write: live windows (when `restore_windows` allows),
-    /// suspended windows, carried-forward entries and cameras; no fsync.
-    /// Clears the dirty flag.
+    /// The debounce's write: live windows (when `restore_windows` allows),
+    /// suspended windows, carried-forward entries and cameras. Suspended windows
+    /// are always saved; a live window is added as a `Quit` record when
+    /// `restore_windows` resolves on for it — per-window, not a global gate, so
+    /// a rule can opt an app in while the section key is off, or out while it's
+    /// on. Clears the dirty flag.
     fn session_store_flush(&mut self) {
         self.session_store.dirty = false;
-        self.write_session(true, false);
+        self.write_session(true);
     }
 
-    fn write_session(&mut self, include_live: bool, fsync: bool) {
+    fn write_session(&mut self, include_live: bool) {
         let Some(path) = self.session_store.path.clone() else {
             return;
         };
         let envelope = self.build_session_envelope(include_live);
-        if let Err(err) = session::write(&path, &envelope, fsync) {
+        // Never fsync'd: it would block the main loop once a second through a
+        // drag or a pan, and buys nothing against the crashes this file is for.
+        if let Err(err) = session::write(&path, &envelope, false) {
             tracing::warn!("failed to write durable session store: {err}");
         }
     }

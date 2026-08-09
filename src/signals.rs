@@ -45,6 +45,14 @@ pub fn listen(handle: &calloop::LoopHandle<'static, DriftWm>) {
     handle
         .insert_source(signals, |event, _, state| {
             tracing::info!("received {:?} — stopping compositor", event.signal());
+            // A debounced session write that comes due now would flush from a
+            // stage this batch's client disconnects are already draining —
+            // expired timers dispatch after the batch's fd events, and the
+            // signalfd is one. Only the batch carrying the signal is covered: a
+            // timer expiring in an earlier batch than the signal still writes
+            // mid-drain, which is the same ≤1s residual as a change armed just
+            // before the logout.
+            state.session_store_cancel_debounce();
             state.loop_signal.stop();
         })
         .expect("failed to register signal source on event loop");

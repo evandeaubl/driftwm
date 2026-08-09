@@ -24,9 +24,9 @@ pub const VERSION: u32 = 2;
 pub const MIN_READABLE_VERSION: u32 = 1;
 
 /// Why a durable entry exists, which decides whether it materializes on restore.
-/// `Explicit` (a live suspend) always comes back; `Quit` (serialized at
-/// graceful shutdown) only when `restore_windows` resolves on for its app — the
-/// global default, or a window rule keyed on the record's `app_id`.
+/// `Explicit` (a live suspend) always comes back; `Quit` (a window that was
+/// still open at the last save) only when `restore_windows` resolves on for its
+/// app — the global default, or a window rule keyed on the record's `app_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Origin {
@@ -146,8 +146,8 @@ pub fn read(path: &Path) -> SessionEnvelope {
 }
 
 /// Atomically write the envelope: serialize to a sibling `.tmp`, then rename
-/// over the target. `fsync` flushes the file before the rename (the shutdown
-/// write); steady-state writes skip it to stay off the blocking path.
+/// over the target. `fsync` flushes the file before the rename, at the cost of
+/// blocking the caller.
 pub fn write(path: &Path, envelope: &SessionEnvelope, fsync: bool) -> std::io::Result<()> {
     use std::io::Write as _;
 

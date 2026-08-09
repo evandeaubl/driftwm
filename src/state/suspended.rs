@@ -958,8 +958,10 @@ impl DriftWm {
             None,
         );
 
-        // An adopt is an immediate, user-visible change — write through now.
-        self.session_store_write_now();
+        // Arm the debounce rather than writing through: an adoption can be
+        // reached from an idle callback in a teardown batch, and no handler may
+        // rebuild the envelope synchronously (see `session_store_mark_dirty`).
+        self.session_store_mark_dirty();
     }
 
     #[cfg(not(test))]
@@ -1091,8 +1093,10 @@ impl DriftWm {
         // The suspended window may have sat under the cursor; re-target so a
         // click no longer lands in dead space.
         self.refresh_pointer_focus();
-        // A dismiss is an immediate, user-visible change — write through now.
-        self.session_store_write_now();
+        // Arm the debounce rather than writing through: a dismiss is reachable
+        // over IPC and from a stand-in's own close, either of which can share a
+        // teardown batch (see `session_store_mark_dirty`).
+        self.session_store_mark_dirty();
     }
 
     /// The pre-fullscreen restore rect (saved location + size) of the focused
@@ -1456,7 +1460,7 @@ impl DriftWm {
         let identity = self.resolve_identity(&app_id)?;
         // A fullscreen self-close reports the fullscreen buffer size at its
         // camera park, not the windowed rect — the pre-fullscreen saved rect
-        // (same source the explicit action and the shutdown serializer use)
+        // (same source the explicit action and the durable session write use)
         // seats the stand-in where the window actually was. Failing that, the
         // pre-unmap snapshot rect, then the live markless rect.
         let rect = fullscreen_restore_rect
@@ -1596,9 +1600,12 @@ impl DriftWm {
         }
 
         self.refresh_pointer_focus();
-        // A create is an immediate, user-visible change — write through now
-        // rather than on the debounce timer (move/resize use that).
-        self.session_store_write_now();
+        // Arm the debounce rather than writing through. This is the site that
+        // makes it load-bearing: the conversion runs from `toplevel_destroyed`
+        // and cannot tell a user's close from a logout killing the client, so
+        // under `suspend_on_close` a synchronous rebuild here would serialize
+        // the stage mid-drain (see `session_store_mark_dirty`).
+        self.session_store_mark_dirty();
     }
 
     /// Drop suspend / real-close marks whose deadline has passed. Takes `now`

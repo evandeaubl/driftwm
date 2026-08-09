@@ -629,9 +629,11 @@ fn a_stand_in_resize_clamps_marks_the_store_and_bumps_blur() {
          to the window adopted into this slot and drop the real adopt size"
     );
 
-    // Cancels the debounce timer the mark armed; `debug_counters` has no entry
-    // for event-loop timers, so the teardown baseline would not catch one.
+    // The dismiss clears the stand-in; the flush cancels the debounce timer the
+    // mark armed, and `debug_counters` has no entry for event-loop timers, so
+    // the teardown baseline would not catch one.
     f.state().dismiss_suspended(sid);
+    f.state().session_store_write_now();
 }
 
 /// Resizing a stand-in leaves the z-order alone, exactly as `msg move` does — an

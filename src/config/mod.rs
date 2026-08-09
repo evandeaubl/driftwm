@@ -137,9 +137,9 @@ pub struct SessionConfig {
     /// leaves a suspended window behind instead of destroying the window.
     /// Overridable per window rule. Read at close time, so hot-reload applies.
     pub suspend_on_close: bool,
-    /// When true, eligible windows are serialized on graceful shutdown (keybind
-    /// quit or SIGTERM/SIGHUP) and materialized as suspended windows on the next
-    /// launch. Read at use, so hot-reload applies.
+    /// When true, eligible windows are serialized into the rolling durable save
+    /// and materialized as suspended windows on the next launch. Read at use, so
+    /// hot-reload applies.
     pub restore_windows: bool,
     /// When true, each output's camera and zoom are seeded from the durable
     /// session on the next launch. Read at load time, so a mid-session flip

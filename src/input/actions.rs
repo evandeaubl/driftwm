@@ -695,6 +695,10 @@ impl DriftWm {
             Action::SetTrackpad(state) => self.set_trackpad(state),
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");
+                // Same reason the signal handler does it: this arrives over IPC
+                // too, so it can share a batch with the client disconnects of a
+                // session manager tearing everything down at once.
+                self.session_store_cancel_debounce();
                 self.loop_signal.stop();
             }
         }

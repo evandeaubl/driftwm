@@ -173,7 +173,7 @@ pub(super) struct SessionFileConfig {
     /// Convert client-initiated closes into suspended windows instead of
     /// destroying them. Per-window overridable via a `suspend_on_close` rule.
     pub suspend_on_close: Option<bool>,
-    /// Save eligible windows on graceful shutdown and bring them back as
+    /// Save eligible windows to the durable session and bring them back as
     /// suspended windows on the next launch.
     pub restore_windows: Option<bool>,
     /// Seed each output's camera and zoom from the durable session on the next
@@ -301,7 +301,7 @@ pub(super) struct WindowRuleFile {
     /// suspend). `None` inherits the global setting.
     pub suspend_on_close: Option<bool>,
     /// Override the global `restore_windows` for matched windows, so an app can
-    /// be kept out of (or opted into) the graceful-shutdown save. Independent of
+    /// be kept out of (or opted into) the durable save. Independent of
     /// `suspend_on_close`, which only governs closes. `None` inherits the global
     /// setting.
     pub restore_windows: Option<bool>,

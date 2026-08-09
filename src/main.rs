@@ -435,10 +435,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         data.session_store_watch_cameras();
     });
 
-    // Runs on both a clean Action::Quit/SIGTERM exit and a loop error, so a
-    // shutdown fault never silently drops the durable session: flush it
-    // (fsync'd) before wiping the runtime state file.
-    data.serialize_session_on_shutdown();
+    // Deliberately no durable session write here: by this point the batch that
+    // stopped the loop has already dispatched whatever client disconnects came
+    // with it, so a rebuild would serialize a drained stage over a good file
+    // (see `DriftWm::session_store_mark_dirty`).
     state::remove_state_file();
 
     run_result?;

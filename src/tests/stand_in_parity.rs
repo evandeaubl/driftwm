@@ -640,10 +640,11 @@ fn nudge_marks_the_session_store_dirty_for_live_and_stand_in() {
         "the stand-in's new position is queued for the durable write"
     );
 
-    // Required, not hygiene: this cancels the debounce timer the nudge armed,
-    // and `debug_counters` has no entry for event-loop timers, so the fixture's
-    // teardown baseline would not catch one left running.
+    // The dismiss clears the stand-in; the flush cancels the debounce timer the
+    // nudges armed, and `debug_counters` has no entry for event-loop timers, so
+    // the fixture's teardown baseline would not catch one left running.
     f.state().dismiss_suspended(sid);
+    f.state().session_store_write_now();
 }
 
 /// `zoom-to-fit-snapped` fired with a stand-in focused frames the very cluster
