@@ -35,6 +35,28 @@ use crate::ipc::protocol::{CanvasLayerInfo, OutputFullscreen, OutputPinned, Wind
 
 use super::{CameraSeed, DriftWm, output_logical_size, output_state};
 
+/// Whether an output's viewport moved far enough to count as motion rather than
+/// float jitter. The thresholds live here, inside the one predicate both change
+/// detectors call — this one for the runtime state file, and the durable session
+/// store's [`DriftWm::session_store_watch_cameras`]. A tighter threshold in
+/// either would have its file rewritten on an idle desktop at whatever cadence
+/// that caller runs, so neither gets to re-type them.
+///
+/// A non-finite camera or zoom compares false throughout and so reads as
+/// unmoved. Deliberate: it can't be persisted usefully (`valid_camera_seed`
+/// refuses it on load), and calling it motion would re-arm on every iteration
+/// forever, since it never equals the baseline it was stored as either.
+pub(crate) fn viewport_moved(
+    (was_camera, was_zoom): (Point<f64, Logical>, f64),
+    (camera, zoom): (Point<f64, Logical>, f64),
+) -> bool {
+    const CAMERA_EPSILON: f64 = 0.5;
+    const ZOOM_EPSILON: f64 = 0.001;
+    (camera.x - was_camera.x).abs() >= CAMERA_EPSILON
+        || (camera.y - was_camera.y).abs() >= CAMERA_EPSILON
+        || (zoom - was_zoom).abs() >= ZOOM_EPSILON
+}
+
 /// A fullscreen window in the state file's per-output section.
 #[derive(Serialize)]
 struct FullscreenInfo {
@@ -418,11 +440,8 @@ impl DriftWm {
             let name = output.name();
             let (cam, z) = (os.camera, os.zoom);
             drop(os);
-            if let Some(&(cached_cam, cached_z)) = self.state_file_cameras.get(&name) {
-                if (cam.x - cached_cam.x).abs() >= 0.5
-                    || (cam.y - cached_cam.y).abs() >= 0.5
-                    || (z - cached_z).abs() >= 0.001
-                {
+            if let Some(&cached) = self.state_file_cameras.get(&name) {
+                if viewport_moved(cached, (cam, z)) {
                     any_output_dirty = true;
                     break;
                 }
@@ -649,6 +668,23 @@ mod tests {
             is_widget: false,
             suspended: false,
         }
+    }
+
+    #[test]
+    fn viewport_motion_thresholds_hold_for_both_detectors() {
+        let at = |x: f64, y: f64, zoom: f64| (Point::from((x, y)), zoom);
+        let origin = at(0.0, 0.0, 1.0);
+
+        assert!(viewport_moved(origin, at(0.5, 0.0, 1.0)));
+        assert!(viewport_moved(origin, at(0.0, -0.5, 1.0)));
+        assert!(!viewport_moved(origin, at(0.49, 0.49, 1.0)));
+        assert!(viewport_moved(origin, at(0.0, 0.0, 0.999)));
+        assert!(!viewport_moved(origin, at(0.0, 0.0, 0.9995)));
+
+        // Non-finite reads as unmoved either way — see viewport_moved's doc.
+        let nan = at(f64::NAN, 0.0, 1.0);
+        assert!(!viewport_moved(origin, nan));
+        assert!(!viewport_moved(nan, nan));
     }
 
     #[test]

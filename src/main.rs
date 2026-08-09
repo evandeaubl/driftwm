@@ -430,6 +430,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // After the relaunch sweep, so a deferral whose deadline just passed
         // reveals its window on the same tick rather than the next one.
         data.sweep_deferred_adoptions();
+        // Last, so a camera animation that ticked during this iteration's
+        // render is diffed at the position it actually reached.
+        data.session_store_watch_cameras();
     });
 
     // Runs on both a clean Action::Quit/SIGTERM exit and a loop error, so a

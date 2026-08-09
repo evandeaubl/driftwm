@@ -1123,6 +1123,215 @@ fn restore_camera_off_preserves_disconnected_output_camera() {
     assert_eq!(saved.zoom, 0.75);
 }
 
+/// Move `output`'s camera by `(dx, dy)` the way an interactive pan grab does:
+/// straight into `output_state`, the route `set_camera_on`'s own doc records as
+/// bypassing it.
+fn pan_output(output: &smithay::output::Output, dx: f64, dy: f64) {
+    let mut os = crate::state::output_state(output);
+    os.camera += Point::from((dx, dy));
+}
+
+/// A pan arms the debounced write, so a session where the user only moved the
+/// viewport still persists it; a sub-pixel nudge is float jitter and must not.
+/// Each half flushes first — `dirty` is set by plenty of unrelated paths and
+/// cleared only by a flush, so an unflushed "assert dirty" would pass with no
+/// watcher at all.
+#[test]
+fn a_pan_arms_the_debounce_and_a_jitter_nudge_does_not() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    pan_output(&output, 40.0, -25.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "a pan is durable session state: the envelope always serializes cameras"
+    );
+
+    f.state().session_store_write_now();
+    pan_output(&output, 0.4, 0.4);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "a sub-threshold nudge is jitter — arming on it would rewrite the file \
+         once a second on an idle desktop"
+    );
+}
+
+/// The same pair for zoom, whose threshold is far finer than the camera's.
+#[test]
+fn a_zoom_change_arms_the_debounce_and_a_finer_one_does_not() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    crate::state::output_state(&output).zoom = 0.998;
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "a zoom past the threshold arms the durable write"
+    );
+
+    f.state().session_store_write_now();
+    crate::state::output_state(&output).zoom = 0.9975;
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "a zoom delta under 0.001 is jitter"
+    );
+}
+
+/// Sub-threshold steps are measured against the last *armed* camera, not the
+/// previous tick's: a slow continuous pan accumulates into an arming delta
+/// instead of creeping across the canvas unrecorded.
+#[test]
+fn sub_threshold_drift_accumulates_until_it_arms() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    for step in 1..=2 {
+        pan_output(&output, 0.2, 0.0);
+        f.pump(1);
+        assert!(
+            !f.state().session_store_dirty(),
+            "{step} steps of 0.2px is still under the 0.5px threshold"
+        );
+    }
+    pan_output(&output, 0.2, 0.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "0.6px of accumulated drift crosses the threshold"
+    );
+
+    // Cancels the debounce timer the drift armed; `debug_counters` has no entry
+    // for event-loop timers, so the teardown baseline would not catch one.
+    f.state().session_store_write_now();
+}
+
+/// A connecting output only seeds the watcher's baseline — it does not arm.
+/// Otherwise every boot would leave a pending debounce behind the outputs it
+/// came up with.
+#[test]
+fn a_connecting_output_seeds_the_watcher_without_arming() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.state().session_store_write_now();
+
+    f.add_output(1, (1920, 1080));
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the output's camera is a first sight, not motion"
+    );
+}
+
+/// With persistence off, a pan must not leave a debounce armed for a write that
+/// can never happen.
+#[test]
+fn no_session_path_never_arms_on_a_pan() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    assert!(f.state().session_store.path.is_none());
+
+    pan_output(&output, 500.0, 500.0);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "persistence is off entirely — a pan must not arm a timer that can never write"
+    );
+}
+
+/// The write side records cameras unconditionally: a session that only panned,
+/// with `restore_camera` off and no window ever touched, still has its viewport
+/// in the file. What the watcher exists to get written.
+#[test]
+fn a_pan_alone_reaches_the_file() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut f = Fixture::with_config(Config::default());
+    assert!(!f.state().config.session.restore_camera);
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    pan_output(&output, 400.0, 300.0);
+    f.pump(1);
+    assert!(f.state().session_store_dirty(), "the pan armed the write");
+    // The debounce is a real 1s calloop timer with no injectable clock, so drive
+    // the flush it would run rather than waiting it out.
+    f.state().session_store_write_now();
+
+    let saved = session::read(&path);
+    let saved_output = saved
+        .outputs
+        .get("HEADLESS-1")
+        .expect("the panned output is in the envelope");
+    assert_eq!(saved_output.camera, [-560.0, -240.0]);
+    assert!(saved.entries.is_empty(), "no window was ever touched");
+}
+
+/// Multi-output: a pan on the second monitor arms, and unplugging it drops its
+/// baseline rather than arming — so a replug seeds afresh instead of diffing
+/// the new camera against one from before the unplug.
+#[test]
+fn a_second_output_arms_on_its_own_pan_and_re_seeds_after_a_replug() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let second = f.add_output(2, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    pan_output(&second, 40.0, -25.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "the envelope carries every output's camera, not just the active one's"
+    );
+
+    f.state().session_store_write_now();
+    f.remove_output(&second);
+    assert!(
+        !f.state().session_store_dirty(),
+        "nothing a disconnect does to the survivor — focus hand-over, pointer \
+         warp — moves its camera"
+    );
+
+    let second = f.add_output(2, (1920, 1080));
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the replugged output is a first sight again — its default camera is \
+         not diffed against the one it had before the unplug"
+    );
+
+    f.state().session_store_write_now();
+    pan_output(&second, 40.0, -25.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "and it is watched from there on"
+    );
+
+    f.state().session_store_write_now();
+}
+
 /// A create writes the durable file immediately; a dismiss rewrites it. Drives
 /// the real conversion path, not the test-only insertion hook.
 #[test]

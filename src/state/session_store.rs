@@ -31,6 +31,7 @@ use driftwm::desktop_entry::AppIdentity;
 use driftwm::session::{self, Origin, SessionEntry, SessionEnvelope, SessionOutput};
 use driftwm::window_ext::WindowExt;
 
+use super::persistence::viewport_moved;
 use super::{
     AUTO_PLACE_CLUSTER_THRESHOLD, DriftWm, StageWindow, SuspendedId, SuspendedWindow, output_state,
 };
@@ -83,6 +84,14 @@ pub struct SessionStore {
     /// while nothing else holds focus, so an off-screen boot defers the record
     /// to the next one instead of erasing it.
     pub(crate) restore_focus: Option<SuspendedId>,
+    /// Per-output camera/zoom as of the last viewport motion that armed the
+    /// debounce — the baseline [`DriftWm::session_store_watch_cameras`] diffs
+    /// against. Keyed by output name, and dropped there on the first iteration
+    /// that finds the output gone. Bounded by the connected outputs, so unlike
+    /// its sibling `state_file_cameras` it is deliberately absent from
+    /// `debug_counters`: the fixture does drive this one, and every scenario
+    /// with a session path would end above baseline.
+    last_seen_cameras: HashMap<String, (Point<f64, Logical>, f64)>,
     /// A change is waiting for the debounce timer to write it.
     dirty: bool,
     /// The armed one-shot debounce timer, if any.
@@ -291,6 +300,60 @@ impl DriftWm {
                 TimeoutAction::Drop
             })
             .ok();
+    }
+
+    /// Arm the debounced write when an output's camera or zoom has moved since
+    /// the motion that last armed it. Driven once per event-loop iteration.
+    ///
+    /// Pan and zoom are the one piece of durable session state nothing else
+    /// marks dirty — no `session_store_mark_dirty` site is viewport-driven —
+    /// yet the envelope always serializes cameras. Without this, a session where
+    /// the user panned and zoomed but touched no window never persists its
+    /// viewport.
+    ///
+    /// The runtime state file's [`DriftWm::write_state_file_if_dirty`] carries a
+    /// second camera-delta detector over the same [`viewport_moved`]. They stay
+    /// separate because their seed semantics differ: that one arms on an output
+    /// it has never cached, since it wants an initial state-file write for it,
+    /// while a first sight here must only seed — arming would leave a pending
+    /// debounce behind every output connect, boot ones included. That detector
+    /// also runs only in the render loops, which no test drives.
+    pub fn session_store_watch_cameras(&mut self) {
+        if self.session_store.path.is_none() {
+            return;
+        }
+        let live: Vec<(String, Point<f64, Logical>, f64)> = self
+            .space
+            .outputs()
+            .map(|output| {
+                let os = output_state(output);
+                (output.name(), os.camera, os.zoom)
+            })
+            .collect();
+        // An output that went away drops its baseline instead of arming: a
+        // disconnect is not viewport motion, and a replug should re-seed rather
+        // than diff against a camera from before the unplug.
+        self.session_store
+            .last_seen_cameras
+            .retain(|name, _| live.iter().any(|(live_name, ..)| live_name == name));
+
+        let mut moved = false;
+        for (name, camera, zoom) in live {
+            let seen = self.session_store.last_seen_cameras.get(&name).copied();
+            if seen.is_some_and(|baseline| !viewport_moved(baseline, (camera, zoom))) {
+                // Sub-threshold: the baseline stays where the last arming left
+                // it, so a slow continuous pan accumulates into an arming delta
+                // instead of creeping past it unrecorded.
+                continue;
+            }
+            moved |= seen.is_some();
+            self.session_store
+                .last_seen_cameras
+                .insert(name, (camera, zoom));
+        }
+        if moved {
+            self.session_store_mark_dirty();
+        }
     }
 
     /// Flush the durable session at graceful shutdown (keybind quit or
