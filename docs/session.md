@@ -183,7 +183,8 @@ seeds fill the names the save lacks. Like the camera flag, it's read at launch.
 
 The session lives at `~/.local/state/driftwm/session.json` (respects
 `XDG_STATE_HOME`). Every change that belongs in it — suspending, dismissing,
-relaunching, moving, resizing, panning — queues a write that lands ~1s later, so
+relaunching, moving, resizing, panning, changing focus — queues a write that
+lands ~1s later, so
 a drag or a continuous pan costs one write per second rather than one per
 frame. A file written by an older driftwm is
 read and converted in place; one from a *newer* version, or that fails to parse

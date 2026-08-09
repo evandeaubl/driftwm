@@ -1965,7 +1965,7 @@ fn no_path_disables_persistence() {
 }
 
 /// A `restore_windows = false` rule keeps its app's live window out of the
-/// shutdown save even with the global flag on, while an unruled app's live
+/// durable save even with the global flag on, while an unruled app's live
 /// window still saves — proving the exclusion is the rule, not a missing
 /// desktop entry or some other blanket ineligibility.
 #[test]
@@ -2149,7 +2149,7 @@ fn restore_windows_false_rule_with_title_excludes_records_by_app_id() {
     );
 
     // The live window's real title is known at save time, so the same rule keeps
-    // it out of the shutdown save — and the record is carried forward once, not
+    // it out of the durable save — and the record is carried forward once, not
     // re-saved as a stand-in of its own.
     let id = f.add_client();
     map_titled_at(
@@ -2264,7 +2264,7 @@ fn restore_windows_false_rule_still_saves_an_explicit_stand_in() {
 
 /// `restore_windows` is resolved against the live config, not the rule stamped
 /// when a window mapped, so a rule added or dropped by a hot-reload decides the
-/// next shutdown save without either window remapping.
+/// next durable save without either window remapping.
 #[test]
 fn a_hot_reloaded_restore_windows_rule_decides_the_next_save() {
     let cache = TempDir::new();

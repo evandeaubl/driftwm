@@ -3,8 +3,9 @@
 //! and materialize it back into suspended windows at startup.
 //!
 //! Cadence: every durable change — a create, dismiss, adopt, settled
-//! move/resize, viewport motion — arms a short debounce timer, and that timer's
-//! flush is the only writer. Nothing writes at shutdown, deliberately: a logout
+//! move/resize, viewport motion, focus change — arms a short debounce timer,
+//! and that timer's flush is the only writer. Nothing writes at shutdown,
+//! deliberately: a logout
 //! SIGTERMs the compositor and its clients together, so client teardown
 //! dispatches in the same event-loop batch that stops the loop and any rebuild
 //! from there serializes a stage that is already draining (see
@@ -414,7 +415,7 @@ impl DriftWm {
         let mut next_live_id = self.next_suspended_id;
         let windows: Vec<StageWindow> = self.stage.windows().cloned().collect();
         // Focus *intent*, the same anchor auto placement reads, so a launcher's
-        // transient keyboard focus at shutdown doesn't erase the real one.
+        // transient keyboard focus doesn't erase the real one.
         let focused = self.focused_anchor_element();
         // A hand-over this boot refused keeps its flag while nobody else holds
         // focus, so the ordinary `restore_camera = false` boot — stand-in lands
@@ -486,7 +487,7 @@ impl DriftWm {
 
     /// The effective `restore_windows` for `(app_id, title)`: a matching window
     /// rule's override wins, else the global default. Resolved live (not the
-    /// stamped applied rule) so a hot-reload takes effect on the next shutdown.
+    /// stamped applied rule) so a hot-reload takes effect on the next write.
     fn resolve_restore_windows(&self, app_id: &str, title: &str) -> bool {
         self.config
             .resolve_window_rules(app_id, title)
