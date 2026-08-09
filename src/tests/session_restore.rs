@@ -17,6 +17,7 @@ use driftwm::config::Config;
 use driftwm::desktop_entry::DesktopEntryCache;
 use driftwm::session::{self, Origin, SessionEntry, SessionEnvelope, SessionOutput};
 use smithay::utils::{Point, Rectangle, SERIAL_COUNTER, Size};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::decorations::DecorationHit;
 use crate::input::DecoTarget;
@@ -1333,6 +1334,177 @@ fn a_second_output_arms_on_its_own_pan_and_re_seeds_after_a_replug() {
         "and it is watched from there on"
     );
 
+    f.state().session_store_write_now();
+}
+
+/// Moving the focus arms the debounce, so the restored focus is as of the last
+/// focus change rather than as of the last window the user happened to move.
+/// Re-focusing what is already focused must not: `raise_and_focus` re-seats the
+/// same intent on every click, and without the guard a user clicking one window
+/// would rewrite the file once a second forever.
+#[test]
+fn focusing_another_window_arms_the_debounce_and_re_focusing_does_not() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha", "beta"]);
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (-500, -200));
+    let b = f.add_client();
+    map_at(&mut f, b, "beta", (200, 200), (100, -200));
+    let alpha = window_by_app_id(&mut f, "alpha").unwrap();
+
+    // Path last, then a pump, so the watcher has seeded its baseline and any
+    // camera settle from placement is spent before the focus change is measured.
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&alpha, serial);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "the envelope flags which entry held the focus — a focus change is a \
+         durable change"
+    );
+
+    f.state().session_store_write_now();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&alpha, serial);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the intent did not change, so there is nothing new to write"
+    );
+}
+
+/// The stand-in half of the same contract: focus on a suspended window is
+/// recorded too, and it moves through its own setter.
+#[test]
+fn focusing_a_stand_in_arms_the_debounce_and_re_focusing_does_not() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let first = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    let second = f.state().insert_suspended_for_test(
+        2,
+        Point::from((500, 0)),
+        Size::from((300, 200)),
+        "s2",
+        "S2",
+    );
+    f.state().focus_and_raise_suspended(first);
+
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    f.state().focus_and_raise_suspended(second);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "focus moved to the other stand-in"
+    );
+
+    f.state().session_store_write_now();
+    f.state().focus_and_raise_suspended(second);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the intent did not change, so there is nothing new to write"
+    );
+
+    f.state().dismiss_suspended(first);
+    f.state().dismiss_suspended(second);
+    // Cancels the debounce the dismissals armed; the teardown baseline covers
+    // the stage, not the event loop's timers.
+    f.state().session_store_write_now();
+}
+
+/// The third write site: `focus_changed` rewrites the intent for focus seated
+/// on the keyboard directly, which is the only route the dead-intent history
+/// recovery takes. The launcher shape reaches it — an exclusive layer holds the
+/// seat focus while the intended window dies, so the destroy's focus-follow
+/// (which wants the seat focus or the history head) never fires and leaves the
+/// intent pointing at a dead surface; the recovery to the survivor then happens
+/// inside the layer's teardown, with no setter involved.
+#[test]
+fn the_history_recovery_after_a_layer_teardown_arms_the_debounce() {
+    use smithay::utils::IsAlive;
+
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_at(&mut f, id, "survivor", (400, 300), (-500, -200));
+    let doomed_surface = map_at(&mut f, id, "doomed", (200, 200), (100, -200));
+    let survivor = window_by_app_id(&mut f, "survivor").unwrap();
+    let doomed = window_by_app_id(&mut f, "doomed").unwrap();
+
+    // The last real focus change is on the survivor, so it — not the window
+    // about to die — is the history head.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&survivor, serial);
+
+    let launcher = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "launcher");
+    let ls = launcher.surface.clone();
+    launcher.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        kb_interactivity: Some(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive),
+        ..Default::default()
+    });
+    launcher.commit();
+    f.roundtrip(id);
+    let layer = f.client(id).layer(&ls);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // Hover under the launcher moves the intent while the layer keeps the seat
+    // focus — the case the setter's doc comment is written for.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state()
+        .set_window_focus(Some(FocusTarget(server_surface(&doomed))), serial);
+    f.client(id).window(&doomed_surface).destroy();
+    f.double_roundtrip(id);
+    assert!(
+        f.state()
+            .window_focus_surface()
+            .is_some_and(|t| !t.0.alive()),
+        "the intent is left pointing at the window that died under the launcher"
+    );
+
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    f.client(id).layer(&ls).layer_surface.destroy();
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.state().focused_window().as_ref(),
+        Some(&survivor),
+        "the recovery landed on the surviving window"
+    );
+    assert!(
+        f.state().session_store_dirty(),
+        "the recovery's rewrite is a focus change like any other"
+    );
+
+    f.client(id).layer(&ls).surface.destroy();
+    f.double_roundtrip(id);
     f.state().session_store_write_now();
 }
 

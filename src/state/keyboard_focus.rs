@@ -75,6 +75,29 @@ impl DriftWm {
         }
     }
 
+    /// Write the window-focus intent, arming the durable write when it actually
+    /// changes. The only place the field is assigned, so the two setters and
+    /// `focus_changed`'s rewrite all arm on one guard.
+    ///
+    /// The envelope records which entry held focus, and no other mark-dirty
+    /// site is focus-driven: without this, "the window you had focused comes
+    /// back focused" would degrade to as of the last window mutation. Hover
+    /// focus arms as well, deliberately — `focus_follows_mouse` makes most
+    /// focus changes hover changes, so skipping them would miss exactly the
+    /// users the promise is for, and the debounce bounds a pointer crossing
+    /// windows to one write per second.
+    ///
+    /// That bound needs the equality guard: the hover paths already refuse to
+    /// re-focus what is focused, but `raise_and_focus` re-seats the same intent
+    /// on every click.
+    pub(crate) fn set_focus_intent(&mut self, intent: Option<FocusIntent>) {
+        if self.window_focus == intent {
+            return;
+        }
+        self.window_focus = intent;
+        self.session_store_mark_dirty();
+    }
+
     /// Record a window-level keyboard-focus intent and recompute the actual
     /// focus. Higher-priority owners (an exclusive / on-demand layer surface)
     /// still win — this is what keeps a launcher focused while the pointer
@@ -92,7 +115,7 @@ impl DriftWm {
         {
             return;
         }
-        self.window_focus = target.map(FocusIntent::Surface);
+        self.set_focus_intent(target.map(FocusIntent::Surface));
         // Unconditional, `None` included: only `clear_focus_to_empty_canvas` means
         // "blank slate" — a flag surviving an incidental clear would silently kill
         // the fallback for the rest of the session.
@@ -119,7 +142,7 @@ impl DriftWm {
     /// `update_keyboard_focus`, which is THE GATE for every suspended-focus
     /// behavior.
     pub fn set_suspended_focus(&mut self, id: SuspendedId, serial: smithay::utils::Serial) {
-        self.window_focus = Some(FocusIntent::Suspended(id));
+        self.set_focus_intent(Some(FocusIntent::Suspended(id)));
         self.suppress_auto_anchor = false;
         self.on_demand_layer = None;
         self.update_keyboard_focus(serial);

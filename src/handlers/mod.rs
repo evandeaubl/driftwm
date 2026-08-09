@@ -132,7 +132,7 @@ impl SeatHandler for DriftWm {
         if let Some(focus) = focused
             && self.window_for_surface(&focus.0).is_some()
         {
-            self.window_focus = Some(FocusIntent::Surface(focus.clone()));
+            self.set_focus_intent(Some(FocusIntent::Surface(focus.clone())));
         }
     }
 }
