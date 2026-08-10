@@ -375,12 +375,15 @@ impl ExtDataControlHandler for DriftWm {
 delegate_ext_data_control!(DriftWm);
 
 impl PointerConstraintsHandler for DriftWm {
-    fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {
-        // Pointer constraints track pointer focus internally, so bring it up to
-        // date before activating: a client that re-creates a oneshot constraint
-        // (destroyed on deactivation) needs current focus for the new one to
-        // re-arm, e.g. a game whose cursor returns to its fullscreen surface.
-        self.refresh_pointer_focus();
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Constraints arm against pointer focus, so a re-created oneshot
+        // constraint needs it current — but only when it is actually stale. The
+        // refresh dispatches an absolute motion, and the client already holding
+        // focus never moved: its cursor is frozen and it moved that itself with
+        // a position hint, so the motion reads as a jump it never made.
+        if pointer.current_focus().map(|f| f.0).as_ref() != Some(surface) {
+            self.refresh_pointer_focus();
+        }
         self.maybe_activate_pointer_constraint();
     }
 
@@ -403,11 +406,8 @@ impl PointerConstraintsHandler for DriftWm {
         // recreates its lock (Wine/Proton does this constantly), motion events
         // delivered during the gap reach the surface with stale surface-local
         // coordinates and the game snaps the camera back.
-        let window = self.window_for_surface(surface);
-        if let Some(window) = window
-            && let Some(loc) = self.stage.position_of(&window)
-        {
-            pointer.set_location(loc.to_f64() + location);
+        if let Some(origin) = crate::input::window_origin_for_surface(self, surface) {
+            pointer.set_location(origin + location);
         }
     }
 }

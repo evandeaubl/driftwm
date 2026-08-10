@@ -110,8 +110,15 @@ fn cursor_edge_pan_velocity(
     Some(Point::from((vx / len * speed, vy / len * speed)))
 }
 
-/// Find the canvas-space element location of the window that owns the given surface.
-fn window_origin_for_surface(
+/// Canvas-space surface origin of the window whose *root* surface is `surface` —
+/// the point surface-local coordinates are measured from. `None` for a
+/// subsurface or popup, which the identity match never finds.
+///
+/// The stage positions a window by its geometry origin, which sits
+/// `geometry().loc` inside the surface of a client drawing its own shadows, so
+/// surface-local values (constraint regions, cursor hints) need that subtracted
+/// back out.
+pub(crate) fn window_origin_for_surface(
     state: &DriftWm,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
 ) -> Option<Point<f64, smithay::utils::Logical>> {
@@ -119,7 +126,8 @@ fn window_origin_for_surface(
         .stage
         .windows()
         .find(|w| w.wl_surface().as_deref() == Some(surface))?;
-    Some(state.stage.position_of(window)?.to_f64())
+    let position = state.stage.position_of(window)?;
+    Some((position - window.geometry().loc).to_f64())
 }
 
 /// Advance the per-output hot-corner latch and return a newly entered corner.
@@ -710,6 +718,16 @@ impl DriftWm {
         .0;
         let old_focus = pointer.current_focus();
         let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
+        // A lock still holding the surface under the cursor has nothing to
+        // re-seat, and the motion below would read as a jump the client never
+        // made: the lock freezes the cursor while `cursor_position_hint` keeps
+        // moving it silently. A scene change that slid something *else* under
+        // the cursor strands the lock, so that falls through to clear it.
+        // Confines are excluded — that cursor really moves, and suppressing the
+        // re-seat would leave it measured against a stale surface origin.
+        if self.pointer_locked() && under.as_ref().map(|(focus, _)| focus) == old_focus.as_ref() {
+            return;
+        }
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.start_time.elapsed().as_millis() as u32;
         pointer.motion(
