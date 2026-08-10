@@ -5,10 +5,12 @@
 //! stand-ins, so a crash or a logout that kills the clients leaves the canvas
 //! as of the last flush in the file.
 //!
-//! That flush is a real 1s calloop timer with no injectable clock, so scenarios
+//! That flush is a real calloop timer with no injectable clock, so scenarios
 //! drive `session_store_write_now` where production would wait the debounce
 //! out. An "assert dirty" therefore has to flush first: mapping a toplevel and
-//! plenty of other paths set the flag, and only a flush clears it.
+//! plenty of other paths set the flag, and only a flush clears it. The timer
+//! runs on either of two intervals — the window one, or the longer camera one —
+//! and the scenarios that care assert which, never a wall-clock value.
 
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -21,7 +23,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_l
 
 use crate::decorations::DecorationHit;
 use crate::input::DecoTarget;
-use crate::state::{CameraSeed, FocusTarget, StageWindow, SuspendedWindow};
+use crate::state::{CameraSeed, FocusTarget, StageWindow, SuspendedWindow, WRITE_DEBOUNCE};
 
 use super::real::TempDir;
 use super::{Fixture, map_window, server_surface, window_by_app_id};
@@ -1222,6 +1224,137 @@ fn sub_threshold_drift_accumulates_until_it_arms() {
 
     // Cancels the debounce timer the drift armed; `debug_counters` has no entry
     // for event-loop timers, so the teardown baseline would not catch one.
+    f.state().session_store_write_now();
+}
+
+/// Viewport motion coalesces on the longer interval. Panning is this canvas's
+/// primary interaction, and at the window interval a sustained pan would rewrite
+/// the file once a second for the whole gesture. The four interval scenarios
+/// assert which side of `WRITE_DEBOUNCE` a debounce landed on rather than any
+/// absolute value — the timer is a real calloop one with no injectable clock.
+#[test]
+fn a_pan_arms_the_long_camera_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    // Flush first: plenty of paths arm the short interval and only a flush
+    // disarms, so an unflushed reading would measure whatever was already
+    // pending instead of the pan.
+    f.state().session_store_write_now();
+    pan_output(&output, 40.0, -25.0);
+    f.pump(1);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left > WRITE_DEBOUNCE),
+        "a pan alone waits out the camera interval, not the window one"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// A window mutation keeps the short interval: it is a discrete change the user
+/// expects to survive, where a camera is continuous and self-correcting.
+#[test]
+fn a_window_mutation_arms_the_short_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    f.state().dismiss_suspended(sid);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "losing a dismiss to a crash is losing the user's own action"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// A window mutation arriving mid-pan pulls the pending write back in: the
+/// nearer deadline wins, so a discrete change is never held for the camera's
+/// sake.
+#[test]
+fn a_window_mutation_shortens_a_pending_camera_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    pan_output(&output, 40.0, -25.0);
+    f.pump(1);
+    let after_the_pan = f.state().session_store_debounce_remaining();
+    assert!(
+        after_the_pan.is_some_and(|left| left > WRITE_DEBOUNCE),
+        "precondition: the pan armed the camera interval"
+    );
+
+    f.state().dismiss_suspended(sid);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "the dismiss re-armed the pending write at the window interval"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// Not the other way round: a camera move while a window mutation is pending
+/// leaves that deadline where it is instead of pushing the write out to the
+/// camera interval — otherwise a pan started right after a dismiss would delay
+/// it by four seconds.
+#[test]
+fn a_pan_does_not_extend_a_pending_window_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    f.state().dismiss_suspended(sid);
+    let after_the_dismiss = f.state().session_store_debounce_remaining();
+    assert!(
+        after_the_dismiss.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "precondition: the dismiss armed the window interval"
+    );
+
+    pan_output(&output, 400.0, 300.0);
+    f.pump(1);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "the pan rides the pending flush rather than deferring it"
+    );
+
     f.state().session_store_write_now();
 }
 

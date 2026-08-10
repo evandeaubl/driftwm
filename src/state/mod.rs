@@ -62,6 +62,11 @@ pub use suspended::{
 };
 pub(crate) use window_frame::{configured_window_size, frame_loc_for_center, visual_frame_center};
 
+// Kept out of the group above so fixture scenarios can name the interval a
+// window mutation debounces on without widening it for production.
+#[cfg(test)]
+pub(crate) use session_store::WRITE_DEBOUNCE;
+
 use smithay::{
     desktop::{PopupGrab, PopupManager, Space, Window},
     input::{Seat, SeatState},

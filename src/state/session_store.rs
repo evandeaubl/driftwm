@@ -3,14 +3,15 @@
 //! and materialize it back into suspended windows at startup.
 //!
 //! Cadence: every durable change — a create, dismiss, adopt, settled
-//! move/resize, viewport motion, focus change — arms a short debounce timer,
-//! and that timer's flush is the only writer. Nothing writes at shutdown,
-//! deliberately: a logout SIGTERMs the compositor and its clients together, so
-//! client teardown dispatches in the same event-loop batch that stops the loop
-//! and any rebuild from there serializes a stage that is already draining (see
+//! move/resize, viewport motion, focus change — arms a debounce timer, and that
+//! timer's flush is the only writer. Nothing writes at shutdown, deliberately:
+//! a logout SIGTERMs the compositor and its clients together, so client
+//! teardown dispatches in the same event-loop batch that stops the loop and any
+//! rebuild from there serializes a stage that is already draining (see
 //! [`DriftWm::session_store_mark_dirty`]). The costs are a tail of up to
-//! [`WRITE_DEBOUNCE`], and no fsync — a power cut can lose the last write,
-//! while a crash or SIGKILL cannot, since the page cache outlives the process.
+//! [`WRITE_DEBOUNCE`] ([`CAMERA_WRITE_DEBOUNCE`] when only the viewport moved),
+//! and no fsync — a power cut can lose the last write, while a crash or SIGKILL
+//! cannot, since the page cache outlives the process.
 //! Suspended windows are saved regardless of `restore_windows`; a live window
 //! is saved as a `Quit` record when that flag resolves on for it (global
 //! default or a per-app rule). `path == None` disables everything (a
@@ -20,7 +21,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use smithay::desktop::Window;
 use smithay::reexports::calloop::RegistrationToken;
@@ -39,7 +40,16 @@ use super::{
 };
 
 /// How long a move/resize coalesces before the durable write lands.
-const WRITE_DEBOUNCE: Duration = Duration::from_secs(1);
+pub(crate) const WRITE_DEBOUNCE: Duration = Duration::from_secs(1);
+
+/// The same for viewport motion, which is far cheaper to lose: a camera is
+/// continuous and self-correcting — wherever a pan ends is what the next flush
+/// records — and `restore_camera` is off by default, so most sessions never read
+/// the saved one back. A window mutation is a discrete event the user expects to
+/// survive, so it keeps the short interval. Panning being the primary
+/// interaction on this canvas, sharing that interval would rewrite the file once
+/// a second for the length of every gesture.
+const CAMERA_WRITE_DEBOUNCE: Duration = Duration::from_secs(5);
 
 /// A per-output viewport seed waiting for its output to connect. The two
 /// sources speak different conventions, so the variant carries which one this
@@ -98,6 +108,11 @@ pub struct SessionStore {
     dirty: bool,
     /// The armed one-shot debounce timer, if any.
     timer: Option<RegistrationToken>,
+    /// When that timer comes due, so a later change can tell whether the armed
+    /// flush already covers it. Set and cleared with `timer` — a deadline left
+    /// behind after the token is gone would answer for a timer that no longer
+    /// exists.
+    deadline: Option<Instant>,
 }
 
 impl DriftWm {
@@ -265,7 +280,7 @@ impl DriftWm {
     /// synchronous rebuild is exactly what [`DriftWm::session_store_mark_dirty`]
     /// exists to avoid, so gating this keeps production unable to name a
     /// synchronous writer at all. The fixture needs one because the debounce is
-    /// a real 1s calloop timer with no injectable clock.
+    /// a real calloop timer with no injectable clock.
     #[cfg(test)]
     pub fn session_store_write_now(&mut self) {
         if self.session_store.path.is_none() {
@@ -280,6 +295,7 @@ impl DriftWm {
     /// the batch's fd events, so a debounce that comes due alongside SIGTERM
     /// would flush from a stage the client disconnects had already drained.
     pub(crate) fn session_store_cancel_debounce(&mut self) {
+        self.session_store.deadline = None;
         if let Some(token) = self.session_store.timer.take() {
             self.loop_handle.remove(token);
         }
@@ -287,15 +303,17 @@ impl DriftWm {
 
     /// Whether a change is waiting on the debounce timer. The flush writes
     /// unconditionally, so an armed debounce has no other seam to observe short
-    /// of waiting out the wall-clock second.
+    /// of waiting out its wall-clock interval.
     #[cfg(test)]
     pub(crate) fn session_store_dirty(&self) -> bool {
         self.session_store.dirty
     }
 
-    /// Arm the debounced write: a one-shot ~1s timer coalesces a drag's stream
-    /// of position/size updates into a single write. The universal way to queue
-    /// a durable change, and the only one production has.
+    /// Arm the debounced write on the window interval: a one-shot
+    /// [`WRITE_DEBOUNCE`] timer coalesces a drag's stream of position/size
+    /// updates into a single write. The universal way to queue a durable change,
+    /// and the only one production has — viewport motion takes the longer
+    /// [`CAMERA_WRITE_DEBOUNCE`] through [`Self::session_store_mark_dirty_after`].
     ///
     /// Nothing may rebuild the envelope synchronously from a handler. calloop
     /// checks the loop's stop flag only after dispatching a whole batch of
@@ -303,31 +321,64 @@ impl DriftWm {
     /// `toplevel_destroyed` → `unmap_window` → `stage.remove` — land in the same
     /// batch as the signal that stops us, in an order nothing controls. A
     /// rebuild reached from any of them writes a half-drained stage over a file
-    /// that was correct. Arming instead is safe: the debounce either comes due
-    /// before the teardown batch or never runs at all.
+    /// that was correct. Arming instead is safe for the batch carrying the
+    /// signal, which cancels the debounce before stopping the loop. One residual
+    /// stays: a timer armed in an *earlier* batch still comes due mid-drain (see
+    /// [`crate::signals::listen`]) — the same window as a change armed moments
+    /// before the logout.
     pub fn session_store_mark_dirty(&mut self) {
+        self.session_store_mark_dirty_after(WRITE_DEBOUNCE);
+    }
+
+    /// [`Self::session_store_mark_dirty`] with the interval spelled out, so the
+    /// camera watcher can queue its change on the longer one. The nearer
+    /// deadline wins: an armed flush already due by `delay` covers this change
+    /// too, so a camera move can never push a pending window mutation out, while
+    /// a window mutation arriving mid-pan pulls the write back in.
+    fn session_store_mark_dirty_after(&mut self, delay: Duration) {
         if self.session_store.path.is_none() {
             return;
         }
         self.session_store.dirty = true;
-        if self.session_store.timer.is_some() {
+        let deadline = Instant::now() + delay;
+        if self.session_store.timer.is_some()
+            && self.session_store.deadline.is_some_and(|armed| armed <= deadline)
+        {
             return;
         }
-        let timer = Timer::from_duration(WRITE_DEBOUNCE);
+        self.session_store_cancel_debounce();
+        let timer = Timer::from_duration(delay);
         self.session_store.timer = self
             .loop_handle
             .insert_source(timer, |_, _, data: &mut DriftWm| {
                 data.session_store.timer = None;
+                data.session_store.deadline = None;
                 if data.session_store.dirty {
                     data.session_store_flush();
                 }
                 TimeoutAction::Drop
             })
             .ok();
+        // Derived from the token, not set alongside it: a registration that
+        // failed leaves nothing armed, and a deadline standing in for a timer
+        // that does not exist would suppress every later arming.
+        self.session_store.deadline = self.session_store.timer.is_some().then_some(deadline);
+    }
+
+    /// How long the armed debounce still has to run, `None` when nothing is
+    /// armed. Test-only: the timer is a real calloop one with no injectable
+    /// clock, so scenarios assert which of the two intervals is armed rather
+    /// than waiting either out.
+    #[cfg(test)]
+    pub(crate) fn session_store_debounce_remaining(&self) -> Option<Duration> {
+        self.session_store
+            .deadline
+            .map(|at| at.saturating_duration_since(Instant::now()))
     }
 
     /// Arm the debounced write when an output's camera or zoom has moved since
-    /// the motion that last armed it. Driven once per event-loop iteration.
+    /// the motion that last armed it, on the longer [`CAMERA_WRITE_DEBOUNCE`].
+    /// Driven once per event-loop iteration.
     ///
     /// Pan and zoom are the one piece of durable session state nothing else
     /// marks dirty — no `session_store_mark_dirty` site is viewport-driven —
@@ -376,7 +427,7 @@ impl DriftWm {
                 .insert(name, (camera, zoom));
         }
         if moved {
-            self.session_store_mark_dirty();
+            self.session_store_mark_dirty_after(CAMERA_WRITE_DEBOUNCE);
         }
     }
 
