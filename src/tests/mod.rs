@@ -30,6 +30,7 @@ mod ext_workspace;
 mod focus_placement;
 mod focus_timing;
 mod frame_space;
+mod fullscreen_exit_cost;
 mod fullscreen_handoff;
 mod gesture_move;
 mod gesture_resize;

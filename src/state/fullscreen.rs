@@ -478,10 +478,13 @@ impl DriftWm {
             let mut os = super::output_state(output);
             os.camera = camera;
             os.zoom = zoom;
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
         }
+        // A coast's delta was measured against the parked viewport; carrying it
+        // onto the restored one flings the camera off a throw the user never
+        // made. This also drops the samples of a pan still in flight, so a
+        // gesture straddling the exit loses its fling rather than launching one
+        // into a viewport it never touched.
+        self.cancel_animations_on(output);
         self.update_output_from_camera();
 
         let pointer = self.seat.get_pointer().unwrap();
@@ -506,6 +509,11 @@ impl DriftWm {
         // refreshed by pointer motion, and a stale flag would route the next
         // press/scroll over the bar to the canvas.
         self.refresh_pointer_focus();
+        // The re-seat above is the resync, so the one the warp deferred would
+        // only repeat the walk. Cleared here and not in `refresh_pointer_focus`:
+        // the flag doubles as udev's wake-up for a warp that schedules no redraw
+        // of its own, and only this path knows its own exit keeps the loop awake.
+        self.pending_pointer_resync = false;
     }
 
     /// Tear down any fullscreen entry whose window is dead, restoring that
