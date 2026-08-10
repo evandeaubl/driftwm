@@ -141,14 +141,13 @@ impl DriftWm {
         })
     }
 
-    /// Whether `surface` is the focused surface and holds an active constraint
-    /// of either kind.
-    pub(crate) fn constrained_to(&self, surface: &WlSurface) -> bool {
+    /// Whether `surface` is the focused surface and holds an active lock.
+    pub(crate) fn locked_to(&self, surface: &WlSurface) -> bool {
         let pointer = self.seat.get_pointer().unwrap();
         pointer
             .current_focus()
             .is_some_and(|focus| focus.0 == *surface)
-            && self.pointer_constraint_active()
+            && self.pointer_locked()
     }
 
     /// Whether the focused surface holds an active *lock*, as opposed to a

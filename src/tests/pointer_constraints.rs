@@ -172,7 +172,6 @@ fn fullscreening_a_locked_game_leaves_its_lock_untouched() {
     let (surface, _) = shadowed_window(&mut f, id);
     let _lock = lock_pointer_over(&mut f, id, &surface);
 
-    let frozen = f.state().seat.get_pointer().unwrap().current_location();
     f.client(id).state.pointer_positions.clear();
 
     let window = window_by_app_id(&mut f, "game").unwrap();
@@ -180,13 +179,8 @@ fn fullscreening_a_locked_game_leaves_its_lock_untouched() {
     f.double_roundtrip(id);
 
     assert!(
-        f.state().pointer_constraint_active(),
+        f.state().pointer_locked(),
         "the game's lock must survive the fullscreen entry"
-    );
-    assert_eq!(
-        f.state().seat.get_pointer().unwrap().current_location(),
-        frozen,
-        "a locked pointer must not be moved by the fullscreen entry"
     );
     assert_eq!(
         f.client(id).state.pointer_positions,

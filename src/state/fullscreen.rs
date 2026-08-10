@@ -314,13 +314,14 @@ impl DriftWm {
                 canvas_pos
             };
 
-            // A client that constrained the cursor before fullscreening already
-            // holds pointer focus, so there is nothing to re-seat. Take the
-            // relocation silently and leave the constraint standing: dropping it
-            // to send the motion below would hand the client an absolute jump it
-            // never made, which a game reads as camera movement.
-            // `warp_pointer` treats a constrained cursor the same way.
-            if self.constrained_to(&wl_surface) {
+            // A client that locked the cursor before fullscreening already holds
+            // pointer focus, so there is nothing to re-seat. Take the relocation
+            // silently and leave the lock standing: dropping it to send the
+            // motion below would hand the client an absolute jump it never made,
+            // which a game reads as camera movement. `warp_pointer` treats a
+            // locked cursor the same way. A confine is excluded — that cursor
+            // really moves, so it needs the motion.
+            if self.locked_to(&wl_surface) {
                 pointer.set_location(new_pos);
                 return;
             }
