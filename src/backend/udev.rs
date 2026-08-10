@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -16,9 +17,9 @@ use smithay::{
             compositor::{DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
-        egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority},
+        egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority, fence::EGLFence},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        renderer::ImportDma,
+        renderer::{ImportDma, sync::SyncPoint},
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{self, UdevBackend, UdevEvent},
     },
@@ -1308,6 +1309,80 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
     data.active_outputs.remove(&output);
 }
 
+/// How long to wait on a render fence the first time it doesn't come back.
+///
+/// Sits well above even a pathological composite (4K, blurred, full-output
+/// redraw, several monitors in one pass): tripping this on a merely slow frame
+/// would trade a stall for a corrupt one.
+const FENCE_WAIT_BUDGET: Duration = Duration::from_secs(2);
+
+/// What to wait once a fence has already missed [`FENCE_WAIT_BUDGET`]. The
+/// "might just be slow" reading is spent by then, and the loop is rendering
+/// every output serially — at the full budget a wedged GPU leaves under a
+/// percent of the loop for the VT switch this bound exists to permit.
+const FENCE_WAIT_WEDGED: Duration = Duration::from_millis(50);
+
+/// Whether the fence is currently failing, latched across frames. The condition
+/// persists while the GPU is wedged and the subscriber logs synchronously on
+/// this thread, so warning per frame would itself cost frames. Cleared on the
+/// first success, so a later episode is reported again rather than swallowed.
+static FENCE_FAILING: AtomicBool = AtomicBool::new(false);
+
+/// Wait for the GPU to finish the frame, but never indefinitely.
+///
+/// `SyncPoint::wait` is `eglClientWaitSync` with `EGL_FOREVER` on the
+/// compositor's only thread, so a fence that never signals takes the event loop
+/// with it — input, Wayland dispatch, and the session notifier a VT switch needs
+/// — leaving a reboot as the only way out.
+///
+/// Giving up does not make the frame correct. This path runs precisely where KMS
+/// can't be gated on the fence, so a flip that goes out early can show a partial
+/// frame; that is the artifact `wait_for_frame_completion` exists to suppress.
+/// The trade is a rare corrupt frame against a session that has to be
+/// power-cycled.
+///
+/// Only bounds the wait it can see: when the renderer can't export a fence at
+/// all, smithay falls back to `glFinish` inside `render_frame`, which has
+/// already returned by the time this runs.
+fn wait_for_fence(sync: &SyncPoint, output: &Output) {
+    // A sync point with no fence waits on nothing. Every other kind is
+    // unreachable here: the swapchain's fence comes from the GLES renderer,
+    // which produces an EGL fence or none at all.
+    let Some(fence) = sync.get::<EGLFence>() else {
+        return;
+    };
+    let budget = if FENCE_FAILING.load(Ordering::Relaxed) {
+        FENCE_WAIT_WEDGED
+    } else {
+        FENCE_WAIT_BUDGET
+    };
+    let failed = match fence.client_wait(Some(budget), true) {
+        Ok(true) => false,
+        Ok(false) => {
+            report_fence_failure(output, &format!("still unsignalled after {budget:?}"));
+            true
+        }
+        Err(err) => {
+            report_fence_failure(output, &format!("wait failed: {err}"));
+            true
+        }
+    };
+    FENCE_FAILING.store(failed, Ordering::Relaxed);
+}
+
+/// Warn on the frame a fence starts failing, then stay quiet until it recovers.
+fn report_fence_failure(output: &Output, what: &str) {
+    if FENCE_FAILING.load(Ordering::Relaxed) {
+        tracing::debug!("render fence on {}: {what}", output.name());
+        return;
+    }
+    tracing::warn!(
+        "render fence on {}: {what}. Flipping without it — the GPU is not \
+         completing work, so expect missing or corrupt frames.",
+        output.name()
+    );
+}
+
 /// Render a single frame and queue it to the DRM compositor.
 fn render_frame(
     data: &mut DriftWm,
@@ -1456,12 +1531,16 @@ fn render_frame(
         && (rr.needs_sync() || data.config.backend.wait_for_frame_completion)
         && let PrimaryPlaneElement::Swapchain(ref element) = rr.primary_element
     {
+        // `has_fence` distinguishes a real wait from the fenceless case, which
+        // reports needs_sync but blocks on nothing — without it a smoke test
+        // reads a permanent no-op as "the path is exercised".
         tracing::debug!(
-            "Fence wait: needs_sync={}, force={}",
+            "Fence wait: needs_sync={}, force={}, has_fence={}",
             rr.needs_sync(),
             data.config.backend.wait_for_frame_completion,
+            element.sync.contains_fence(),
         );
-        let _ = element.sync.wait();
+        wait_for_fence(&element.sync, output);
     }
 
     match render_result {
