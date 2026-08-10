@@ -296,20 +296,6 @@ impl DriftWm {
             && let Some(wl_surface) = window.wl_surface()
         {
             let pointer = self.seat.get_pointer().unwrap();
-            // Deactivate any constraint on the old focused surface
-            if let Some(old) = pointer.current_focus() {
-                smithay::wayland::pointer_constraints::with_pointer_constraint(
-                    &old.0,
-                    &pointer,
-                    |c| {
-                        if let Some(c) = c
-                            && c.is_active()
-                        {
-                            c.deactivate();
-                        }
-                    },
-                );
-            }
             // Keep the cursor at the same on-screen spot across the zoom park:
             // canvas position alone would land elsewhere (or off-output) once
             // zoom != 1. Same geometric-visibility check as
@@ -327,7 +313,36 @@ impl DriftWm {
             } else {
                 canvas_pos
             };
-            let origin = self.stage.position_of(window).unwrap_or_default().to_f64();
+
+            // A client that constrained the cursor before fullscreening already
+            // holds pointer focus, so there is nothing to re-seat. Take the
+            // relocation silently and leave the constraint standing: dropping it
+            // to send the motion below would hand the client an absolute jump it
+            // never made, which a game reads as camera movement.
+            // `warp_pointer` treats a constrained cursor the same way.
+            if self.constrained_to(&wl_surface) {
+                pointer.set_location(new_pos);
+                return;
+            }
+
+            // Deactivate any constraint on the old focused surface
+            if let Some(old) = pointer.current_focus() {
+                smithay::wayland::pointer_constraints::with_pointer_constraint(
+                    &old.0,
+                    &pointer,
+                    |c| {
+                        if let Some(c) = c
+                            && c.is_active()
+                        {
+                            c.deactivate();
+                        }
+                    },
+                );
+            }
+            // Surface origin, not the geometry origin the stage positions by:
+            // smithay subtracts it to get surface-local coordinates.
+            let origin =
+                crate::input::window_origin_for_surface(self, &wl_surface).unwrap_or_default();
             pointer.motion(
                 self,
                 Some((FocusTarget(wl_surface.into_owned()), origin)),
