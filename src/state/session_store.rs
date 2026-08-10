@@ -5,10 +5,9 @@
 //! Cadence: every durable change — a create, dismiss, adopt, settled
 //! move/resize, viewport motion, focus change — arms a short debounce timer,
 //! and that timer's flush is the only writer. Nothing writes at shutdown,
-//! deliberately: a logout
-//! SIGTERMs the compositor and its clients together, so client teardown
-//! dispatches in the same event-loop batch that stops the loop and any rebuild
-//! from there serializes a stage that is already draining (see
+//! deliberately: a logout SIGTERMs the compositor and its clients together, so
+//! client teardown dispatches in the same event-loop batch that stops the loop
+//! and any rebuild from there serializes a stage that is already draining (see
 //! [`DriftWm::session_store_mark_dirty`]). The costs are a tail of up to
 //! [`WRITE_DEBOUNCE`], and no fsync — a power cut can lose the last write,
 //! while a crash or SIGKILL cannot, since the page cache outlives the process.

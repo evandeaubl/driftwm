@@ -76,8 +76,8 @@ impl DriftWm {
     }
 
     /// Write the window-focus intent, arming the durable write when it actually
-    /// changes. The only place the field is assigned, so the two setters and
-    /// `focus_changed`'s rewrite all arm on one guard.
+    /// changes. Every production assignment of the field goes through here, so
+    /// the two setters and `focus_changed`'s rewrite share one guard.
     ///
     /// The envelope records which entry held focus, and no other mark-dirty
     /// site is focus-driven: without this, "the window you had focused comes

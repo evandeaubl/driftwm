@@ -143,8 +143,8 @@ restore_windows = false
 Two things to keep in mind:
 
 - The flag is **independent of `suspend_on_close`**: that one governs closes,
-  this one the logout save. Set *both* to `false` for an app that should never
-  leave a stand-in behind.
+  this one whether still-open windows are saved. Set *both* to `false` for an
+  app that should never leave a stand-in behind.
 - **Key the rule on `app_id`.** Saved records carry no title, so a `title`
   criterion narrows only what gets *saved*; on the way back the rule is read
   off `app_id` alone, and decides for every saved window of that app. The
@@ -184,10 +184,9 @@ seeds fill the names the save lacks. Like the camera flag, it's read at launch.
 The session lives at `~/.local/state/driftwm/session.json` (respects
 `XDG_STATE_HOME`). Every change that belongs in it — suspending, dismissing,
 relaunching, moving, resizing, panning, changing focus — queues a write that
-lands ~1s later, so
-a drag or a continuous pan costs one write per second rather than one per
-frame. A file written by an older driftwm is
-read and converted in place; one from a *newer* version, or that fails to parse
+lands ~1s later, so a drag or a continuous pan costs one write per second rather
+than one per frame. A file written by an older driftwm is read and converted in
+place; one from a *newer* version, or that fails to parse
 or can't be read at all, is quarantined next to it as
 `session.json.corrupt.<timestamp>` or `session.json.unreadable.<timestamp>`,
 and startup continues with an empty session.

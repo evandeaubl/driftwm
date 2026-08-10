@@ -1356,8 +1356,8 @@ fn focusing_another_window_arms_the_debounce_and_re_focusing_does_not() {
     map_at(&mut f, b, "beta", (200, 200), (100, -200));
     let alpha = window_by_app_id(&mut f, "alpha").unwrap();
 
-    // Path last, then a pump, so the watcher has seeded its baseline and any
-    // camera settle from placement is spent before the focus change is measured.
+    // Path last, then a pump, so the watcher seeds its baseline from wherever
+    // placement left the camera and only the focus change is left to measure.
     f.state().session_store.path = Some(tmp.path().join("session.json"));
     f.pump(1);
 
@@ -2216,7 +2216,7 @@ fn a_title_only_restore_windows_rule_does_not_govern_what_comes_back() {
     f.state().dismiss_suspended(restored[0].0.id);
 }
 
-/// An explicitly suspended stand-in is saved at shutdown even for an app a
+/// An explicitly suspended stand-in is saved even for an app a
 /// `restore_windows = false` rule keeps out of the save: the rule governs the
 /// automatic save of still-open windows, not an artifact the user deliberately
 /// left on the canvas — which is what the load side's `Explicit` bypass expects
