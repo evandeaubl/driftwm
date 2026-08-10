@@ -23,6 +23,7 @@ use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
@@ -37,6 +38,12 @@ use wayland_protocols::ext::workspace::v1::client::{
     ext_workspace_group_handle_v1::{self, ExtWorkspaceGroupHandleV1},
     ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
     ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
+};
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_locked_pointer_v1::{
+    self, ZwpLockedPointerV1,
+};
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1::{
+    Lifetime, ZwpPointerConstraintsV1,
 };
 use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
@@ -84,6 +91,9 @@ pub struct State {
     /// Bound alongside the seat, so every scenario can observe touch delivery
     /// without opting in.
     pub touch: Option<WlTouch>,
+    /// Bound alongside the seat, for the same reason as `touch`.
+    pub pointer: Option<WlPointer>,
+    pub pointer_constraints: Option<ZwpPointerConstraintsV1>,
     pub xdg_activation: Option<XdgActivationV1>,
     pub ext_session_lock_manager: Option<ExtSessionLockManagerV1>,
 
@@ -93,6 +103,9 @@ pub struct State {
     pub session_locks: Vec<Lock>,
     /// Every `wl_touch` event this client has received, oldest first.
     pub touch_events: Vec<TouchEvent>,
+    /// Surface-local position carried by every `wl_pointer` enter/motion this
+    /// client has received, oldest first.
+    pub pointer_positions: Vec<(f64, f64)>,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -391,6 +404,8 @@ impl Client {
             viewporter: None,
             seat: None,
             touch: None,
+            pointer: None,
+            pointer_constraints: None,
             xdg_activation: None,
             ext_session_lock_manager: None,
             windows: Vec::new(),
@@ -398,6 +413,7 @@ impl Client {
             popups: Vec::new(),
             session_locks: Vec::new(),
             touch_events: Vec::new(),
+            pointer_positions: Vec::new(),
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -567,6 +583,12 @@ impl Client {
             .unwrap()
             .0
             .clone()
+    }
+
+    /// Lock the pointer to `surface` with a persistent lifetime. The lock only
+    /// becomes active once the pointer is over the surface.
+    pub fn lock_pointer(&mut self, surface: &WlSurface) -> ZwpLockedPointerV1 {
+        self.state.lock_pointer(surface)
     }
 
     /// Send `ext_session_lock_manager_v1.lock`, entering
@@ -861,6 +883,12 @@ impl State {
         activation.activate(token, target);
     }
 
+    pub fn lock_pointer(&mut self, surface: &WlSurface) -> ZwpLockedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        constraints.lock_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
+    }
+
     pub fn lock_session(&mut self) {
         let manager = self.ext_session_lock_manager.as_ref().unwrap();
         let lock = manager.lock(&self.qh, ());
@@ -1010,6 +1038,12 @@ impl Window {
     /// Declare a maximum size, the ceiling `SizeConstraints` clamps to.
     pub fn set_max_size(&self, w: i32, h: i32) {
         self.xdg_toplevel.set_max_size(w, h);
+    }
+
+    /// Declare the visible bounds inside the surface: it extends `(x, y)` beyond
+    /// the window at the top-left, the way a client drawing its own shadows does.
+    pub fn set_geometry(&self, x: i32, y: i32, w: i32, h: i32) {
+        self.xdg_surface.set_window_geometry(x, y, w, h);
     }
 
     pub fn set_fullscreen(&self, output: Option<&WlOutput>) {
@@ -1288,7 +1322,11 @@ impl Dispatch<WlRegistry, ()> for State {
                     let version = min(version, WlSeat::interface().version);
                     let seat: WlSeat = registry.bind(name, version, qh, ());
                     state.touch = Some(seat.get_touch(qh, ()));
+                    state.pointer = Some(seat.get_pointer(qh, ()));
                     state.seat = Some(seat);
+                } else if interface == ZwpPointerConstraintsV1::interface().name {
+                    let version = min(version, ZwpPointerConstraintsV1::interface().version);
+                    state.pointer_constraints = Some(registry.bind(name, version, qh, ()));
                 } else if interface == XdgActivationV1::interface().name {
                     let version = min(version, XdgActivationV1::interface().version);
                     state.xdg_activation = Some(registry.bind(name, version, qh, ()));
@@ -1705,6 +1743,63 @@ impl Dispatch<WlTouch, ()> for State {
             _ => unreachable!(),
         };
         state.touch_events.push(recorded);
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlPointer,
+        event: <WlPointer as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // `enter` carries a position too, so a regression that dropped focus and
+        // re-entered instead of re-motioning would still land one on the client.
+        match event {
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            }
+            | wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            } => state.pointer_positions.push((surface_x, surface_y)),
+            _ => (),
+        }
+    }
+}
+
+impl Dispatch<ZwpPointerConstraintsV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpPointerConstraintsV1,
+        _event: <ZwpPointerConstraintsV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<ZwpLockedPointerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpLockedPointerV1,
+        event: <ZwpLockedPointerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_locked_pointer_v1::Event::Locked => (),
+            zwp_locked_pointer_v1::Event::Unlocked => (),
+            _ => unreachable!(),
+        }
     }
 }
 

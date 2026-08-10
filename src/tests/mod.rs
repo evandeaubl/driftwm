@@ -43,6 +43,7 @@ mod layer_destroy_focus;
 mod layer_frame_gating;
 mod opacity;
 mod pinned_phantom;
+mod pointer_constraints;
 mod popups;
 mod real_clients;
 mod relaunch;
