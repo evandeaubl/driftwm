@@ -3,8 +3,9 @@
 One mechanism backs the `suspend-window` action and the four `[session]`
 options: `suspend_on_close` leaves a placeholder behind on every
 client-initiated close, `restore_windows` brings windows that were still open
-at logout back after a restart, and `restore_camera` and `restore_bookmarks`
-restore where the canvas was framed and the bookmarks you set.
+at the last save back after a restart, and `restore_camera` and
+`restore_bookmarks` restore where the canvas was framed and the bookmarks you
+set.
 
 ## Suspended windows
 
@@ -94,11 +95,17 @@ Escape hatches, for closes you want to stay real closes:
 > crashing from it quitting cleanly. With `suspend_on_close` on, a crashed
 > app's window and position survive, and `Enter` brings it right back.
 
-A logout is the exception. It kills every client at once, which looks like a
-mass close, but those stand-ins never reach the saved file — the session that
-comes back is the rolling save from before the logout. So a window closed at
-logout returns only if `restore_windows` covers it, not because
-`suspend_on_close` is on.
+A logout is the exception, and `restore_windows` — not this flag — is what
+decides it. Windows that were still open come back only if that flag covers
+them; if you want them back, turn it on. Stand-ins are unaffected either way:
+one that already existed is always saved and always comes back, whether an
+explicit `suspend-window` or a `suspend_on_close` conversion left it there.
+
+The stand-ins a logout's *own* closes would leave usually don't reach the file —
+the compositor is being killed alongside its clients, so what survives is the
+rolling save from before the logout. A staggered shutdown is the exception: a
+session manager that stops app units before the compositor gives those closes
+time to convert and be saved, and they come back like any other stand-in.
 
 ## `restore_windows`
 
@@ -108,16 +115,17 @@ restore_windows = true
 ```
 
 Every eligible open window is saved as you go, about a second after the canvas
-last changed. On the next launch they come back as dormant suspended windows at
-the positions they were at; nothing auto-launches, you relaunch each one same as
-any other suspended window (or leave it be).
+changes — pan and zoom take a longer five seconds, since a camera moves
+constantly and costs little to lose. On the next launch they come back as
+dormant suspended windows at the positions they were at; nothing auto-launches,
+you relaunch each one same as any other suspended window (or leave it be).
 
 Nothing extra is saved when the compositor exits, so a logout, a `kill -9` and a
 crash all restore whatever that rolling save last held — up to about a second of
-window motion can be lost. Losing power is the one case that can cost more than
-that second: the file is never forced to disk, so a cut at the wrong moment can
-leave it half-written, and a file that no longer parses is set aside at startup
-and the session starts empty.
+window motion can be lost, or five seconds of panning. Losing power is the one
+case that can cost more than that: the file is never forced to disk, so a cut at
+the wrong moment can leave it half-written, and a file that no longer parses is
+set aside at startup and the session starts empty.
 
 Suspended windows themselves are **always** saved and restored, regardless of
 this flag; `restore_windows` only decides whether still-_open_ windows are
@@ -183,11 +191,12 @@ seeds fill the names the save lacks. Like the camera flag, it's read at launch.
 
 The session lives at `~/.local/state/driftwm/session.json` (respects
 `XDG_STATE_HOME`). Every change that belongs in it — suspending, dismissing,
-relaunching, moving, resizing, panning, changing focus — queues a write that
-lands ~1s later, so a drag or a continuous pan costs one write per second rather
-than one per frame. A file written by an older driftwm is read and converted in
-place; one from a *newer* version, or that fails to parse
-or can't be read at all, is quarantined next to it as
+relaunching, moving, resizing, changing focus — queues a write that lands ~1s
+later, so a drag costs one write per second rather than one per frame. Panning
+and zooming queue the same write on a ~5s delay instead, so a long pan across
+the canvas costs a write every five seconds. A file written by an older driftwm
+is read and converted in place; one from a *newer* version, or that fails to
+parse or can't be read at all, is quarantined next to it as
 `session.json.corrupt.<timestamp>` or `session.json.unreadable.<timestamp>`,
 and startup continues with an empty session.
 

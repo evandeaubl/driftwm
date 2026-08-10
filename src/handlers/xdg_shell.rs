@@ -72,8 +72,8 @@ impl XdgShellHandler for DriftWm {
         self.raise_window(&window, false);
         self.enforce_below_windows();
         // A new live window must land in the durable session: the debounced
-        // flush now records live windows, so a crash or SIGKILL after this
-        // point restores it instead of a shutdown race deciding its fate.
+        // flush records live windows, so a crash or SIGKILL past the next one
+        // restores it.
         self.session_store_mark_dirty();
         // Don't focus here: a pre-buffer wl_keyboard.enter is unusable, and
         // set_focus is a no-op when the target is unchanged, so focusing now

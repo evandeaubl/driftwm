@@ -1447,8 +1447,9 @@ fn a_second_output_arms_on_its_own_pan_and_re_seeds_after_a_replug() {
     f.remove_output(&second);
     assert!(
         !f.state().session_store_dirty(),
-        "nothing a disconnect does to the survivor — focus hand-over, pointer \
-         warp — moves its camera"
+        "a disconnect is not viewport motion, and the focus hand-over that \
+         comes with one — which arms the write on its own — has no window to \
+         hand focus to here"
     );
 
     let second = f.add_output(2, (1920, 1080));
@@ -2102,7 +2103,7 @@ fn no_path_disables_persistence() {
 /// window still saves — proving the exclusion is the rule, not a missing
 /// desktop entry or some other blanket ineligibility.
 #[test]
-fn restore_windows_false_rule_excludes_matching_app_from_shutdown_save() {
+fn restore_windows_false_rule_excludes_matching_app_from_the_durable_save() {
     let cache = TempDir::new();
     let tmp = TempDir::new();
     let path = tmp.path().join("session.json");

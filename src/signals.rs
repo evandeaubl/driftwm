@@ -7,9 +7,9 @@
 //!    mask so the same applies to them.
 //! 2. `listen()` — registers calloop's `Signals` source (signalfd-based).
 //!    Blocked signals get queued on the fd and dispatched as normal events;
-//!    the handler calls `loop_signal.stop()`, taking the same shutdown path
-//!    as the Quit keybind (clean event-loop exit, state-file removal,
-//!    Wayland Display drop).
+//!    the handler drops any pending durable-session write and then calls
+//!    `loop_signal.stop()`, taking the same shutdown path as the Quit keybind
+//!    (clean event-loop exit, state-file removal, Wayland Display drop).
 //! 3. `unblock_all()` — runs in `pre_exec` for spawned children so they
 //!    don't inherit our blocked sigmask (which would surprise apps that
 //!    install their own SIGTERM handlers).
