@@ -75,7 +75,7 @@ Persist your canvas across restarts. Suspended windows are always saved to ~/.lo
 
 Default: `false`
 
-Suspend instead of close when a window is closed by the client (titlebar X, in-app quit). close-window bindings, `msg close`, and taskbar closes still close for real. Per-window overridable via a `suspend_on_close` window rule. See docs/session.md.
+Suspend instead of close when a window is closed by the client (titlebar X, in-app quit). close-window bindings, `msg close`, and taskbar closes still close for real. Per-window overridable via a `suspend_on_close` window rule. Whether windows that were still open at a logout come back is governed by [session].restore_windows, not by this flag. See docs/session.md.
 
 ### `restore_windows`
 
