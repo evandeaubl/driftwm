@@ -3,8 +3,9 @@
 //! them from the event loop.
 //!
 //! Carries a second, unrelated subject that belongs in `src/input/`:
-//! `apply_key_repeat`, the pointer quartet (`focus_under`,
-//! `pointer_constraint_active`, `warp_pointer`, `flush_pointer_resync`), and
+//! `apply_key_repeat`, the pointer group (`focus_under`,
+//! `pointer_constraint_active`, `pointer_constraint_locked`, `locked_to`,
+//! `cursor_over_surface`, `warp_pointer`, `flush_pointer_resync`), and
 //! `check_exec_cursor_timeout`. They are here because they were already in
 //! `animation.rs` when its window half was split off, and are pending
 //! relocation — the module name does not describe them.
@@ -163,6 +164,16 @@ impl DriftWm {
                 |c| c.is_some_and(|c| c.is_active() && matches!(&*c, PointerConstraint::Locked(_))),
             )
         })
+    }
+
+    /// Whether the cursor currently sits over `surface`. Pointer focus alone
+    /// can't answer that: [`Self::warp_pointer`] deactivates a constraint
+    /// without re-seating focus (that waits for the next frame), so between the
+    /// two the focused surface is one the cursor has already left.
+    pub(crate) fn cursor_over_surface(&self, surface: &WlSurface) -> bool {
+        let pointer = self.seat.get_pointer().unwrap();
+        self.focus_under(pointer.current_location())
+            .is_some_and(|(under, _)| under.0 == *surface)
     }
 
     /// Keep the cursor at the same screen position after a camera or zoom

@@ -381,7 +381,14 @@ impl PointerConstraintsHandler for DriftWm {
         // refresh dispatches an absolute motion, and the client already holding
         // focus never moved: its cursor is frozen and it moved that itself with
         // a position hint, so the motion reads as a jump it never made.
-        if pointer.current_focus().map(|f| f.0).as_ref() != Some(surface) {
+        //
+        // Stale covers the cursor having left the surface, not just focus
+        // pointing elsewhere: a pan warps the cursor off the window and drops
+        // the constraint a frame before focus follows, and a constraint created
+        // inside that gap would otherwise arm on a window the cursor is no
+        // longer over — freezing it there with no path back.
+        let already_focused = pointer.current_focus().map(|f| f.0).as_ref() == Some(surface);
+        if !already_focused || !self.cursor_over_surface(surface) {
             self.refresh_pointer_focus();
         }
         self.maybe_activate_pointer_constraint();
