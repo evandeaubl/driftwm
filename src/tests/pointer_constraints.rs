@@ -249,11 +249,16 @@ fn fullscreening_a_locked_game_still_relocates_its_cursor() {
     let id = f.add_client();
 
     let (surface, _) = shadowed_window(&mut f, id);
-    // Zoomed out and panned off the canvas origin: at the parked zoom 1 with the
-    // camera already there the relocation is the identity, and the assertions
-    // below would hold whether or not it ran.
+    // Zoomed out and panned away from where the entry parks the camera: at the
+    // parked zoom 1 with the camera already there the relocation is the
+    // identity, and the assertions below would hold whether or not it ran. The
+    // pan is relative because the fixture's camera does not start at the canvas
+    // origin — an absolute one moves the window off screen, and then the cursor
+    // this scenario has to place cannot be reached by any device.
     f.state().set_zoom(0.5);
-    f.state().set_camera(Point::from((100.0, 50.0)));
+    let panned = f.state().camera() + Point::from((100.0, 50.0));
+    f.state().set_camera(panned);
+    f.skip_baseline_check(); // the pan above populates blur_camera_generation
     let _lock = lock_pointer_over(&mut f, id, &surface);
 
     let camera_before = f.state().camera();
@@ -361,9 +366,14 @@ fn a_lock_recreated_after_the_cursor_left_does_not_arm() {
     let lock = lock_pointer_over(&mut f, id, &surface);
 
     // What a camera pan does: the cursor holds its screen position while the
-    // canvas slides beneath it, ending up here on the viewport's top-left
-    // corner, clear of the window centered in it.
-    f.state().warp_pointer(Point::from((100.0, 100.0)));
+    // canvas slides beneath it, ending up clear of the window it was locked to.
+    // Measured off the window rather than written as a fixed canvas point — the
+    // fixture centers the window on a camera that is not at the canvas origin,
+    // so a hand-picked constant lands *inside* the window and the warp keeps the
+    // lock it is supposed to drop.
+    let window = window_by_app_id(&mut f, "game").unwrap();
+    let above_left = f.state().stage.position_of(&window).unwrap().to_f64();
+    f.state().warp_pointer(above_left - Point::from((100.0, 100.0)));
     assert!(
         !f.state().pointer_constraint_active(),
         "the warp must drop the lock it left behind, or this scenario tests \
