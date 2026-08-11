@@ -576,12 +576,9 @@ impl DriftWm {
     }
 
     /// Sit a fullscreen window that committed smaller than its output in the
-    /// middle of it, instead of in its top-left corner where the park put it.
-    ///
-    /// The compositor offers the client the whole output; a client that takes
-    /// less — a fixed-size dialog, a game holding an aspect ratio — leaves the
-    /// rest to the backdrop, and unshifted that remainder is an L down the right
-    /// edge and along the bottom rather than even bars.
+    /// middle of it, instead of in the top-left corner the park mapped it at:
+    /// unshifted, the remainder the backdrop shows is an L down the right edge
+    /// and along the bottom rather than even bars.
     ///
     /// Moves the *mapped* position, not a render offset: every hit test,
     /// pointer-constraint origin and cursor hint in the tree derives from
@@ -590,19 +587,17 @@ impl DriftWm {
     /// from its picture. `set_position` rather than `map_window` — the window is
     /// already topmost and a re-map is a restack.
     ///
-    /// Only on a commit, and only once the fullscreen configure is no longer in
-    /// flight: until the client has acked it, its geometry is still the windowed
-    /// one, and centring *that* would fling a small window to the middle of the
-    /// output and slide it back a frame later, on every fullscreen entry.
-    ///
-    /// An early-acking client (GTK4 acks in its own round trip, then commits its
-    /// old buffer once more) can still slip one commit through that gate and
-    /// take a wrong offset for a frame. That is bounded and self-correcting —
-    /// the next commit recomputes — and it is the cheap end of the trade. The
-    /// tighter witness, the entry animation's own outstanding request, holds for
-    /// a fixed-size client *forever*, because a client that answers the
-    /// fullscreen offer by re-committing the size it already had reads to that
-    /// chase as no answer at all — and fixed-size clients are the whole target.
+    /// Gated on the fullscreen configure no longer being in flight: until the
+    /// client acks, its geometry is still the windowed one, and centring *that*
+    /// would fling a small window to the middle of the output and slide it back
+    /// a frame later, on every fullscreen entry. An early-acking client (GTK4
+    /// acks in its own round trip, then commits its old buffer once more) slips
+    /// one commit through and takes a wrong offset for a frame — bounded, and
+    /// the next commit recomputes. Not gated on the entry animation's
+    /// outstanding request, the tighter witness: a fixed-size client answers the
+    /// fullscreen offer by re-committing the size it already had, which that
+    /// chase reads as no answer at all, so the gate would never open for exactly
+    /// the clients this is for.
     pub fn recentre_fullscreen_window(&mut self, window: &Window) {
         let Some(surface) = window.wl_surface() else {
             return;
@@ -620,8 +615,9 @@ impl DriftWm {
             ((viewport.w - size.w) / 2).max(0),
             ((viewport.h - size.h) / 2).max(0),
         ));
-        // Before the gate below, not after: every commit of a fullscreen game
-        // reaches here, and this settles all but the handful that move anything.
+        // `offset == stored` first: every commit of a fullscreen game reaches
+        // here, and this settles all but the handful that move anything without
+        // paying for the pending-configure walk.
         if offset == stored || super::owes_a_configured_size(window) {
             return;
         }
@@ -635,27 +631,25 @@ impl DriftWm {
             .set_position(&element, position - stored + offset);
         self.stage
             .set_fullscreen_centre_offset(&output.name(), offset);
-        // The picture just moved under a stationary cursor, so smithay's cached
-        // focus and surface origin are stale: without this the client keeps
-        // receiving coordinates from where the window used to be until the user
-        // moves the mouse. The fullscreen exit re-seats for the same reason.
+        // The picture moved under a stationary cursor, so smithay's cached focus
+        // and surface origin are stale: without this the client keeps receiving
+        // coordinates from where the window used to be until the user moves the
+        // mouse.
         //
-        // Except under a pointer lock, which is the one case where re-seating
-        // does harm. A locked cursor is frozen and the client reads only relative
-        // motion, so there is no absolute position to correct — but the window
-        // moving out from under that frozen cursor makes the re-pick land on a
-        // different surface, and `refresh_pointer_focus`'s own lock guard only
-        // covers an *unchanged* focus. The leave it would send tears down the
-        // lock, on exactly the fullscreen games this centring is for.
+        // Except under a pointer lock. That cursor is frozen and the client reads
+        // only relative motion, so there is no absolute position to correct — but
+        // the window moving out from under it makes the re-pick land on a
+        // different surface, which `refresh_pointer_focus`'s own lock guard does
+        // not cover (it only spares an *unchanged* focus). The leave it sends
+        // tears down the lock, on exactly the fullscreen games this is for.
         if !self.pointer_constraint_locked() {
             self.refresh_pointer_focus();
         }
     }
 
     /// How far the fullscreen window on `output` sits from the origin its park
-    /// put it at. Read this *before* tearing the entry down — the close paths
-    /// all need it after they have, which is what the parameter on
-    /// `snapshot_closing_window` is for.
+    /// put it at. Read it *before* tearing the entry down — the close paths need
+    /// it after they have, which is why they thread it through as a parameter.
     pub fn fullscreen_centre_of(&self, output: Option<&Output>) -> Point<i32, Logical> {
         output
             .and_then(|o| self.stage.fullscreen_on(&o.name()))

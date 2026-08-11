@@ -517,16 +517,11 @@ impl DriftWm {
     }
 
     /// Whether `output`'s viewport still sits where `window`'s fullscreen entry
-    /// parked it. The window is mapped at that camera origin at zoom 1 — plus
-    /// `centre_offset`, which is how far a client that committed smaller than
-    /// the output was moved to sit centred in it — so a drifted viewport no
-    /// longer covers it, and claiming coverage there would cull the canvas from
-    /// under it and show the clear color. Settled counterpart of the frozen
-    /// picture's camera-scoped claim in [`FullscreenCover::view`].
-    ///
-    /// The offset is passed in rather than looked up: the caller has already
-    /// resolved the entry, and a second `Option` here would be a second early
-    /// return whose direction has to be argued all over again.
+    /// parked it. The window is mapped at that camera origin at zoom 1, plus the
+    /// `centre_offset` a smaller-than-output commit earned it, so a drifted
+    /// viewport no longer covers it — claiming coverage there would cull the
+    /// canvas from under it and show the clear color. Settled counterpart of the
+    /// frozen picture's camera-scoped claim in [`FullscreenCover::view`].
     ///
     /// Compared exactly, not with an epsilon: the park writes integers and
     /// exactly 1.0, so any difference is a real seam, not rounding noise.
@@ -1133,11 +1128,9 @@ impl DriftWm {
     /// (backend-gated, consumes the captured close pixels). `fullscreen_output`
     /// picks screen-space placement on that output (or the pin's output when
     /// pinned) vs. canvas space otherwise, offset by `fullscreen_centre` for a
-    /// window that under-filled the output and was centred in it. That offset is
-    /// a parameter because the close paths tear the fullscreen entry down before
-    /// getting here — it has to be read while the entry still exists, alongside
-    /// the output itself. `alpha_only` fades in place at scale 1, for the
-    /// suspend-conversion crossfade.
+    /// window that under-filled the output and was centred in it (see
+    /// [`Self::fullscreen_centre_of`]). `alpha_only` fades in place at scale 1,
+    /// for the suspend-conversion crossfade.
     pub(crate) fn snapshot_closing_window(
         &mut self,
         window: &Window,

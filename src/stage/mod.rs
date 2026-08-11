@@ -36,9 +36,8 @@ pub struct FullscreenEntry<W> {
     pub saved_size: Size<i32, Logical>,
     /// How far the window sits from the origin its fullscreen parked the
     /// viewport at, so a client that commits smaller than the output is centred
-    /// in it rather than pinned to its top-left corner. Zero until such a commit
-    /// arrives, and zero for good for the clients that take the size they were
-    /// offered.
+    /// in it rather than pinned to its top-left corner. Zero for a client that
+    /// takes the size it was offered.
     ///
     /// Held here rather than recomputed from live geometry because the position
     /// and this are one fact written twice: anything that derived it separately

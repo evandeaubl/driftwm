@@ -1,20 +1,18 @@
 //! A client that commits smaller than its fullscreen output is centred in it
 //! rather than left pinned to the top-left corner the park mapped it at.
-//! Centring moves the *mapped* stage position, so hit-testing has to follow it
-//! for free, and the settled fullscreen-cull predicate has to keep reading the
-//! output as covered even though the window no longer sits exactly on the
-//! camera origin.
+//! Centring moves the *mapped* stage position, so hit-testing follows it for
+//! free, and the settled fullscreen-cull predicate has to keep reading the
+//! output as covered even though the window no longer sits exactly on the camera
+//! origin.
 //!
-//! Two answer shapes appear here and they behave differently on the way in. A
-//! client that answers at a size it was not already at resolves the
-//! fullscreen-entry chase immediately; one that answers by re-committing the
-//! size it already had does not, because
-//! `WindowAnimations::on_window_commit` reads a size-for-size identical commit
-//! as "nothing new happened". Both are centred at once — the centring is
-//! deliberately not gated on that chase — but only the first reads as covering
-//! the output straight away; the second waits out the entry animation's
-//! real-time endpoint hold, which is why the scenarios that assert coverage for
-//! it drive the clock rather than `tick_until_settled`.
+//! The two answer shapes behave differently on the way in. A client answering at
+//! a size it was not already at resolves the fullscreen-entry chase immediately;
+//! one answering by re-committing the size it already had does not, because
+//! `WindowAnimations::on_window_commit` reads a size-for-size identical commit as
+//! "nothing new happened". Both are centred at once, but only the first reads as
+//! covering the output straight away — the second waits out the entry
+//! animation's real-time endpoint hold, which is why the scenarios asserting
+//! coverage for it drive the clock rather than `tick_until_settled`.
 
 use std::time::{Duration, Instant};
 
@@ -79,11 +77,10 @@ fn commit_at(
     f.double_roundtrip(id);
 }
 
-/// A client that acks the fullscreen configure but takes a size smaller than
-/// the output is moved off the parked corner by half the shortfall on each
-/// axis — and the settled predicate the fullscreen render cull gates on must
-/// still read the output as covered, because it backs the offset out of the
-/// position to recover the park.
+/// A client that acks the fullscreen configure but takes a size smaller than the
+/// output is moved off the parked corner by half the shortfall on each axis — and
+/// the settled predicate the render cull gates on must still read the output as
+/// covered, because it backs that offset out to recover the park.
 #[test]
 fn a_smaller_fullscreen_commit_is_centred_and_still_reads_as_covering_the_output() {
     let mut f = Fixture::new();
@@ -165,11 +162,10 @@ fn a_compliant_fullscreen_commit_keeps_the_plain_park_with_a_zero_offset() {
     f.state().exit_fullscreen_on(&output);
 }
 
-/// A commit that answers with a size smaller than the output but never acks
-/// the fullscreen configure must not centre the window: the compositor still
-/// owes the client an answer to a live configure, so acting on the geometry
-/// now would fling the window to the middle and slide it back once the real
-/// ack lands.
+/// A commit that answers with a size smaller than the output but never acks the
+/// fullscreen configure must not centre the window: acting on geometry that
+/// still owes an answer to a live configure would fling the window to the middle
+/// and slide it back once the real ack lands.
 #[test]
 fn an_unacked_fullscreen_commit_does_not_centre_the_window() {
     let mut f = Fixture::new();
@@ -206,10 +202,8 @@ fn an_unacked_fullscreen_commit_does_not_centre_the_window() {
 
 /// The fixed-size client — the whole reason this exists. It answers the
 /// fullscreen offer by re-committing the size it already had, which the
-/// fullscreen-entry chase reads as no answer at all
-/// (`WindowAnimations::on_window_commit` resolves its outstanding request only
-/// on a size *change*, or a match to the offer). Centring must not be gated on
-/// that chase, or the clients it is for are the ones it never reaches.
+/// fullscreen-entry chase reads as no answer at all. Centring must not be gated
+/// on that chase, or the clients it is for are the ones it never reaches.
 #[test]
 fn a_fixed_size_client_that_re_commits_its_own_size_is_still_centred() {
     let mut f = Fixture::new();

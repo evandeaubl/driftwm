@@ -282,12 +282,12 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     // calls moves a predicate that way. Lock state only advances its confirmation
     // bookkeeping, staying `Locked`. The fullscreen half reads the output's
     // camera and zoom, the window's stage position, and the centring offset its
-    // fullscreen entry holds — and everything either backend runs between the
-    // two calls is submit-and-bookkeeping work —
-    // scanout, presentation feedback, capture, protocol refreshes, persistence —
-    // none of which writes any of them (the centring is written from a client
-    // commit, which cannot land here). That property is the check to re-run when
-    // adding a call here, not this list.
+    // fullscreen entry holds — and everything either backend runs between the two
+    // calls is submit-and-bookkeeping work — scanout, presentation feedback,
+    // capture, protocol refreshes, persistence — none of which writes any of them
+    // (the centring is written from a client commit, which cannot land here).
+    // That property is the check to re-run when adding a call here, not this
+    // list.
     //
     // Scoped to its own block: `layer_map_for_output` below re-locks the same
     // mutex, so holding this one open would deadlock.

@@ -1767,11 +1767,9 @@ pub fn compose_frame(
         all_elements.splice(cursor_count..cursor_count, error_bar);
     }
 
-    // Bottom-most, and appended past the blur on purpose. Inside the slice
+    // Bottom-most, and appended after the blur pass on purpose: inside the slice
     // `process_blur_requests` samples, the fullscreen window would frost its own
-    // backdrop instead of finding nothing behind it; appending here also leaves
-    // `background_start` and the five prefix offsets — all computed above — the
-    // starts they were computed to be.
+    // backdrop instead of finding nothing behind it.
     if output_fullscreen
         && let Some(backdrop) =
             fullscreen_backdrop_element(state, &name, &fullscreen_windows, viewport_size, scale)
@@ -1782,29 +1780,26 @@ pub fn compose_frame(
     all_elements
 }
 
-/// Not a config option, for the same reason `DecorationConfig::SHADOW_COLOR` and
-/// the dot grid's own palette aren't: this is the colour that was already on the
-/// output, written down.
+/// Not a config option: this is the colour that was already on the output,
+/// written down.
 const BACKDROP_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// The plane that stands in for the canvas the fullscreen cull removed, for the
 /// part of the output the fullscreen window does not itself paint over.
 ///
-/// Black, and not configurable: it is not a new look, it is the colour that was
-/// already there. Both backends clear to opaque black, so drawing it changes no
-/// pixel on screen — what it changes is everything that reads the frame rather
-/// than the framebuffer. A capture into an alpha-carrying format clears to
-/// *transparent* (`capture::clear_color_for`), so a screencast of a fullscreen
-/// output currently hands out holes wherever the window's own alpha lets the
-/// clear through.
+/// Both backends clear to opaque black, so drawing it changes no pixel on
+/// screen — what it changes is everything that reads the frame rather than the
+/// framebuffer. A capture into an alpha-carrying format clears to *transparent*
+/// (`capture::clear_color_for`), so without this a screencast of a fullscreen
+/// output hands out holes wherever the window's own alpha lets the clear
+/// through.
 ///
-/// Skipped whenever the window already covers the output opaquely, which is the
-/// ordinary game-at-native-resolution case. That is not an optimization: an
-/// element the window does not fully occlude survives smithay's occlusion pass,
-/// which leaves the primary plane holding two elements instead of one and costs
-/// the frame its direct scan-out. Clients that under-fill or carry a rule
-/// opacity are exactly the ones with something to reveal, and exactly the ones
-/// that had no scan-out to lose.
+/// Skipped whenever the window already covers the output opaquely, and not as an
+/// optimization: an element the window does not fully occlude survives smithay's
+/// occlusion pass, which leaves the primary plane holding two elements instead
+/// of one and costs the frame its direct scan-out. Clients that under-fill or
+/// carry a rule opacity are exactly the ones with something to reveal, and
+/// exactly the ones that had no scan-out to lose.
 fn fullscreen_backdrop_element(
     state: &mut crate::state::DriftWm,
     name: &str,
@@ -1812,9 +1807,8 @@ fn fullscreen_backdrop_element(
     viewport_size: Size<i32, Logical>,
     scale: Scale<f64>,
 ) -> Option<OutputRenderElements> {
-    // A centred window is by definition not at the origin, so size alone would
-    // read a window that under-filled an output and then grew past a mode change
-    // as covering, and leave the strip it has moved off unpainted.
+    // Size alone would read a centred window that later grew past a mode change
+    // as covering, and leave the strip it sits offset from unpainted.
     let centred = state
         .stage
         .fullscreen_on(name)
@@ -1826,11 +1820,10 @@ fn fullscreen_backdrop_element(
                 return false;
             }
             // The window push site multiplies this by an animation's
-            // `visual_alpha`, which is deliberately not read here: the frozen
-            // picture an exit holds does reach this loop mid-animation, but a
-            // freeze holds alpha at 1 by construction, and the growing entry
-            // that would not is exactly what makes the output read as not
-            // visually fullscreen in the first place.
+            // `visual_alpha`, deliberately not read here: the frozen picture an
+            // exit holds does reach this loop mid-animation, but a freeze holds
+            // alpha at 1 by construction, and the growing entry that would not
+            // is what makes the output read as not visually fullscreen anyway.
             window
                 .wl_surface()
                 .and_then(|s| driftwm::config::applied_rule(&s))
@@ -1846,8 +1839,8 @@ fn fullscreen_backdrop_element(
         .fullscreen_backdrop
         .entry(name.to_owned())
         .or_insert_with(|| SolidColorBuffer::new(viewport_size, BACKDROP_COLOR));
-    // A no-op unless the output changed mode, which is the point: the buffer
-    // owns the element `Id` and only bumps its commit counter on a real change.
+    // Picks up an output mode change; a no-op otherwise, which is the point —
+    // see `RenderCache::fullscreen_backdrop`.
     buffer.update(viewport_size, BACKDROP_COLOR);
     Some(OutputRenderElements::Backdrop(
         SolidColorRenderElement::from_buffer(buffer, (0, 0), scale, 1.0, Kind::Unspecified),

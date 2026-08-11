@@ -83,8 +83,7 @@ pub struct RenderCache {
     /// output. Kept per output rather than built per frame because the buffer
     /// mints the element `Id` and only bumps its commit counter on a real size
     /// or colour change — a fresh one each frame would re-damage the whole
-    /// output every frame, the same trap [`crate::render::OutlineBufferKey`]
-    /// records for the outline strips.
+    /// output every frame.
     pub fullscreen_backdrop: HashMap<String, SolidColorBuffer>,
     pub cached_tile_chunks: HashMap<String, crate::render::BgChunkCache>,
     /// Per-output chunked shader-bake caches (`cache_shader`).

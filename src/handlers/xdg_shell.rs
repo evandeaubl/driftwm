@@ -244,9 +244,9 @@ impl XdgShellHandler for DriftWm {
                 .fullscreen_on(&output.name())
                 .map(|entry| Rectangle::new(entry.saved_location, entry.saved_size))
         });
-        // Same window, same reason: the close fade is placed in screen space and
-        // has to start where the picture was drawn, which for a window that
-        // under-filled the output is its centred offset, not the corner.
+        // Also captured before the teardown: the close fade is placed in screen
+        // space and has to start where the picture was drawn, which for a window
+        // that under-filled the output is its centred offset, not the corner.
         let fullscreen_centre = self.fullscreen_centre_of(fs_output.as_ref());
         if let Some(ref output) = fs_output {
             self.stage.take_fullscreen(&output.name());
