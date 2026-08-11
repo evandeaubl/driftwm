@@ -342,7 +342,10 @@ impl DriftWm {
         self.session_store.dirty = true;
         let deadline = Instant::now() + delay;
         if self.session_store.timer.is_some()
-            && self.session_store.deadline.is_some_and(|armed| armed <= deadline)
+            && self
+                .session_store
+                .deadline
+                .is_some_and(|armed| armed <= deadline)
         {
             return;
         }
