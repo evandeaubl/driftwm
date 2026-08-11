@@ -17,7 +17,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use driftwm::stage::{ElementId, StageElement};
-use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes, with_states};
+use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes, get_parent, with_states};
 use smithay::wayland::seat::WaylandFocus;
 
 use smithay::output::Output;
@@ -892,6 +892,11 @@ impl DriftWm {
         if !self.window_animations.any_start_held() {
             return;
         }
+        // At full speed the crossfade this feeds is skipped outright, so every
+        // capture taken here would be discarded on the very next tick.
+        if self.config.effects.animation_speed >= 1.0 {
+            return;
+        }
         let new_buffer = with_states(surface, |states| {
             matches!(
                 states
@@ -903,6 +908,11 @@ impl DriftWm {
             )
         });
         if !new_buffer {
+            return;
+        }
+        // Only a root surface is ever a stage window, so a subsurface's commit
+        // would spend both scans below guaranteeing itself a miss.
+        if get_parent(surface).is_some() {
             return;
         }
         let Some(window) = self.window_for_surface(surface) else {
