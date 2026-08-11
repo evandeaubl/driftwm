@@ -244,6 +244,14 @@ impl XdgShellHandler for DriftWm {
                 .fullscreen_on(&output.name())
                 .map(|entry| Rectangle::new(entry.saved_location, entry.saved_size))
         });
+        // Same window, same reason: the close fade is placed in screen space and
+        // has to start where the picture was drawn, which for a window that
+        // under-filled the output is its centred offset, not the corner.
+        let fullscreen_centre = fs_output
+            .as_ref()
+            .and_then(|output| self.stage.fullscreen_on(&output.name()))
+            .map(|entry| entry.centre_offset)
+            .unwrap_or_default();
         if let Some(ref output) = fs_output {
             self.stage.take_fullscreen(&output.name());
             // Two statements, not one `if let`: the scrutinee's MutexGuard
@@ -268,7 +276,13 @@ impl XdgShellHandler for DriftWm {
         {
             // Crossfade the dying window over the stand-in that takes its rect
             // (fade in place, scale 1). Capture precedes the stage surgery.
-            self.snapshot_closing_window(window, &wl_surface, fs_output.as_ref(), true);
+            self.snapshot_closing_window(
+                window,
+                &wl_surface,
+                fs_output.as_ref(),
+                fullscreen_centre,
+                true,
+            );
             self.convert_to_suspended(window, &wl_surface, conv);
             self.cleanup_surface_state(&wl_surface);
             return;
@@ -393,7 +407,13 @@ impl XdgShellHandler for DriftWm {
             // first on a client disconnect) then owns the snapshot, so this
             // can't stack a second double-alpha fade for the same window.
             if wl_surface.alive() {
-                self.snapshot_closing_window(window, &wl_surface, fs_output.as_ref(), false);
+                self.snapshot_closing_window(
+                    window,
+                    &wl_surface,
+                    fs_output.as_ref(),
+                    fullscreen_centre,
+                    false,
+                );
             }
             self.unmap_window(window);
             // The window left the stage; the durable record must follow, or a

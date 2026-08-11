@@ -60,6 +60,21 @@ fn ack_fullscreen_at(
     f.double_roundtrip(id);
 }
 
+/// A plain redraw at a new size, with no configure to ack — a client resizing
+/// itself after it has already answered the fullscreen offer.
+fn commit_at(
+    f: &mut Fixture,
+    id: ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+    size: (u16, u16),
+) {
+    let window = f.client(id).window(surface);
+    window.set_size(size.0, size.1);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+}
+
 /// A client that acks the fullscreen configure but takes a size smaller than
 /// the output is moved off the parked corner by half the shortfall on each
 /// axis — and the settled predicate the fullscreen render cull gates on must
@@ -74,17 +89,11 @@ fn a_smaller_fullscreen_commit_is_centred_and_still_reads_as_covering_the_output
     ack_fullscreen_at(&mut f, id, &surface, (800, 600));
     tick_until_settled(&mut f);
 
-    let viewport = crate::state::output_logical_size(&output);
-    let size = window.geometry().size;
-    let expected_offset = Point::from((
-        ((viewport.w - size.w) / 2).max(0),
-        ((viewport.h - size.h) / 2).max(0),
-    ));
     let position = f.state().stage.position_of(&window).expect("staged");
     assert_eq!(
         position - camera,
-        expected_offset,
-        "a client that under-fills the output is offset by half the shortfall on each axis"
+        Point::from((560, 240)),
+        "an 800x600 answer on a 1920x1080 output sits half the shortfall in on each axis"
     );
     assert!(
         f.state().is_output_visually_fullscreen(&output),
@@ -195,14 +204,14 @@ fn an_unacked_fullscreen_commit_does_not_centre_the_window() {
     f.state().exit_fullscreen_on(&output);
 }
 
-/// An ack whose commit re-sends the exact pre-fullscreen size answers the
-/// fullscreen configure but not the geometry chase the fullscreen-entry
-/// animation opened — `WindowAnimations::on_window_commit` only resolves that
-/// chase's own outstanding request on a size *change* (or a match to the
-/// offer). Nothing must centre the window on that ack alone: only a later
-/// commit that actually changes size may.
+/// The fixed-size client — the whole reason this exists. It answers the
+/// fullscreen offer by re-committing the size it already had, which the
+/// fullscreen-entry chase reads as no answer at all
+/// (`WindowAnimations::on_window_commit` resolves its outstanding request only
+/// on a size *change*, or a match to the offer). Centring must not be gated on
+/// that chase, or the clients it is for are the ones it never reaches.
 #[test]
-fn an_acked_commit_that_repeats_the_pre_fullscreen_size_does_not_centre_the_window() {
+fn a_fixed_size_client_that_re_commits_its_own_size_is_still_centred() {
     let mut f = Fixture::new();
     let (id, surface, output, window) = fullscreen_window(&mut f, (800, 600));
     let camera = f.state().camera().to_i32_round();
@@ -211,17 +220,36 @@ fn an_acked_commit_that_repeats_the_pre_fullscreen_size_does_not_centre_the_wind
 
     let position = f.state().stage.position_of(&window).expect("staged");
     assert_eq!(
-        position, camera,
-        "acking without ever changing the committed size does not centre the window"
+        position - camera,
+        Point::from((560, 240)),
+        "a client that answers with the size it already had is centred like any other"
     );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// A second answer at a different size re-centres from the position the first
+/// one already moved: the write backs the stored offset out before adding the
+/// new one, so the offsets telescope rather than accumulating.
+#[test]
+fn a_second_smaller_commit_re_centres_rather_than_stacking_offsets() {
+    let mut f = Fixture::new();
+    let (id, surface, output, window) = fullscreen_window(&mut f, (700, 500));
+    let camera = f.state().camera().to_i32_round();
+
+    ack_fullscreen_at(&mut f, id, &surface, (800, 600));
+    tick_until_settled(&mut f);
+    commit_at(&mut f, id, &surface, (1000, 700));
+
+    let position = f.state().stage.position_of(&window).expect("staged");
     assert_eq!(
-        f.state()
-            .stage
-            .fullscreen_on(&output.name())
-            .unwrap()
-            .centre_offset,
-        Point::default(),
-        "no offset is recorded until a commit actually changes the committed size"
+        position - camera,
+        Point::from((460, 190)),
+        "the second answer is centred from the park, not from where the first left it"
+    );
+    assert!(
+        f.state().is_output_visually_fullscreen(&output),
+        "and the cull gate survives a re-centre"
     );
 
     f.state().exit_fullscreen_on(&output);

@@ -590,10 +590,19 @@ impl DriftWm {
     /// from its picture. `set_position` rather than `map_window` — the window is
     /// already topmost and a re-map is a restack.
     ///
-    /// Only on a commit, and only once the client has answered the fullscreen
-    /// configure: until then its geometry is still the windowed one, and
-    /// centring *that* would fling a small window to the middle of the output
-    /// and slide it back a frame later, on every fullscreen entry.
+    /// Only on a commit, and only once the fullscreen configure is no longer in
+    /// flight: until the client has acked it, its geometry is still the windowed
+    /// one, and centring *that* would fling a small window to the middle of the
+    /// output and slide it back a frame later, on every fullscreen entry.
+    ///
+    /// An early-acking client (GTK4 acks in its own round trip, then commits its
+    /// old buffer once more) can still slip one commit through that gate and
+    /// take a wrong offset for a frame. That is bounded and self-correcting —
+    /// the next commit recomputes — and it is the cheap end of the trade. The
+    /// tighter witness, the entry animation's own outstanding request, holds for
+    /// a fixed-size client *forever*, because a client that answers the
+    /// fullscreen offer by re-committing the size it already had reads to that
+    /// chase as no answer at all — and fixed-size clients are the whole target.
     pub fn recentre_fullscreen_window(&mut self, window: &Window) {
         let Some(surface) = window.wl_surface() else {
             return;
@@ -601,14 +610,6 @@ impl DriftWm {
         let Some(output) = self.find_fullscreen_output_for_surface(&surface) else {
             return;
         };
-        let element = StageWindow::Client(window.clone());
-        let owed = self
-            .stage
-            .id_of(&element)
-            .is_some_and(|id| self.window_animations.awaits_requested_size(id));
-        if owed || super::owes_a_configured_size(window) {
-            return;
-        }
         let Some(entry) = self.stage.fullscreen_on(&output.name()) else {
             return;
         };
@@ -619,9 +620,12 @@ impl DriftWm {
             ((viewport.w - size.w) / 2).max(0),
             ((viewport.h - size.h) / 2).max(0),
         ));
-        if offset == stored {
+        // Before the gate below, not after: every commit of a fullscreen game
+        // reaches here, and this settles all but the handful that move anything.
+        if offset == stored || super::owes_a_configured_size(window) {
             return;
         }
+        let element = StageWindow::Client(window.clone());
         let Some(position) = self.stage.position_of(&element) else {
             return;
         };
@@ -631,6 +635,11 @@ impl DriftWm {
             .set_position(&element, position - stored + offset);
         self.stage
             .set_fullscreen_centre_offset(&output.name(), offset);
+        // The picture just moved under a stationary cursor, so smithay's cached
+        // focus and surface origin are stale: without this the client keeps
+        // receiving coordinates from where the window used to be until the user
+        // moves the mouse. The fullscreen exit re-seats for the same reason.
+        self.refresh_pointer_focus();
     }
 
     /// Find which output holds a fullscreen window by its surface.

@@ -1774,7 +1774,7 @@ pub fn compose_frame(
     // starts they were computed to be.
     if output_fullscreen
         && let Some(backdrop) =
-            fullscreen_backdrop_element(state, output, &fullscreen_windows, viewport_size, scale)
+            fullscreen_backdrop_element(state, &name, &fullscreen_windows, viewport_size, scale)
     {
         all_elements.push(backdrop);
     }
@@ -1807,31 +1807,41 @@ const BACKDROP_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 /// that had no scan-out to lose.
 fn fullscreen_backdrop_element(
     state: &mut crate::state::DriftWm,
-    output: &Output,
+    name: &str,
     fullscreen_windows: &[Window],
     viewport_size: Size<i32, Logical>,
     scale: Scale<f64>,
 ) -> Option<OutputRenderElements> {
-    let covered = fullscreen_windows.iter().any(|window| {
-        let size = window.geometry().size;
-        if size.w < viewport_size.w || size.h < viewport_size.h {
-            return false;
-        }
-        window
-            .wl_surface()
-            .and_then(|s| driftwm::config::applied_rule(&s))
-            .and_then(|r| r.opacity)
-            .is_none_or(|o| o >= 1.0)
-    });
+    // A centred window is by definition not at the origin, so size alone would
+    // read a window that under-filled an output and then grew past a mode change
+    // as covering, and leave the strip it has moved off unpainted.
+    let centred = state
+        .stage
+        .fullscreen_on(name)
+        .is_some_and(|entry| entry.centre_offset != Point::default());
+    let covered = !centred
+        && fullscreen_windows.iter().any(|window| {
+            let size = window.geometry().size;
+            if size.w < viewport_size.w || size.h < viewport_size.h {
+                return false;
+            }
+            // The window push site multiplies this by an animation's
+            // `visual_alpha`; here it can't matter, because an in-flight entry
+            // is exactly what makes the output read as not visually fullscreen.
+            window
+                .wl_surface()
+                .and_then(|s| driftwm::config::applied_rule(&s))
+                .and_then(|r| r.opacity)
+                .is_none_or(|o| o >= 1.0)
+        });
     if covered {
-        state.render.fullscreen_backdrop.remove(&output.name());
         return None;
     }
 
     let buffer = state
         .render
         .fullscreen_backdrop
-        .entry(output.name())
+        .entry(name.to_owned())
         .or_insert_with(|| SolidColorBuffer::new(viewport_size, BACKDROP_COLOR));
     // A no-op unless the output changed mode, which is the point: the buffer
     // owns the element `Id` and only bumps its commit counter on a real change.

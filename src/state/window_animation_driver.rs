@@ -1132,13 +1132,18 @@ impl DriftWm {
     /// Flatten the captured content of a closing window into a queued snapshot
     /// (backend-gated, consumes the captured close pixels). `fullscreen_output`
     /// picks screen-space placement on that output (or the pin's output when
-    /// pinned) vs. canvas space otherwise. `alpha_only` fades in place at scale
-    /// 1, for the suspend-conversion crossfade.
+    /// pinned) vs. canvas space otherwise, offset by `fullscreen_centre` for a
+    /// window that under-filled the output and was centred in it. That offset is
+    /// a parameter because every caller tears the fullscreen entry down before
+    /// getting here — it has to be read while the entry still exists, alongside
+    /// the output itself. `alpha_only` fades in place at scale 1, for the
+    /// suspend-conversion crossfade.
     pub(crate) fn snapshot_closing_window(
         &mut self,
         window: &Window,
         surface: &WlSurface,
         fullscreen_output: Option<&Output>,
+        fullscreen_centre: Point<i32, Logical>,
         alpha_only: bool,
     ) {
         // A window awaiting a deferred adopt has never been drawn where it sits,
@@ -1259,19 +1264,14 @@ impl DriftWm {
         let chrome = chrome.as_ref();
         let snapshot = if let Some(output) = fullscreen_output {
             let flatten_scale = output.current_scale().fractional_scale();
-            // The park puts the window at the output's top-left, except when it
-            // under-filled the output and was centred in it — then the picture
-            // has to fade from where it was actually drawn.
-            let centred = self
-                .stage
-                .fullscreen_on(&output.name())
-                .map(|fs| fs.centre_offset)
-                .unwrap_or_default();
             crate::render::snapshot_screen(
                 backend.renderer(),
                 &px,
                 output.name(),
-                Point::from((centred.x - geom_loc.x, centred.y - geom_loc.y)),
+                Point::from((
+                    fullscreen_centre.x - geom_loc.x,
+                    fullscreen_centre.y - geom_loc.y,
+                )),
                 flatten_scale,
                 scale_amplitude,
                 alpha_only,

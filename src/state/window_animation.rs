@@ -760,24 +760,6 @@ impl WindowAnimations {
         }
     }
 
-    /// Whether `id`'s geometry leg is still owed the size it asked the client
-    /// for. True for exactly the stretch in which the window's committed
-    /// geometry is still the pre-request one, so anything deriving a placement
-    /// from that geometry has to wait this out. Cleared by the commit that
-    /// answers, whether the client took the size or picked its own
-    /// ([`Self::on_window_commit`]).
-    pub fn awaits_requested_size(&self, id: ElementId) -> bool {
-        matches!(
-            self.animations.get(&id),
-            Some(WindowAnimation {
-                kind: AnimationKind::Geometry {
-                    requested_size: Some(_),
-                    ..
-                },
-            })
-        )
-    }
-
     /// The current visual rect of a geometry entry in its own space, if any.
     pub fn geometry_visual_rect(&self, id: ElementId) -> Option<Rectangle<f64, Logical>> {
         match self.animations.get(&id) {
