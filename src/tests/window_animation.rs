@@ -812,6 +812,92 @@ fn output_is_visually_fullscreen_only_after_the_entry_finishes() {
     f.state().exit_fullscreen_on(&output);
 }
 
+/// The settled predicate also carries a camera-scoped claim, mirroring the
+/// frozen picture's: the window is mapped at the camera origin, so a viewport
+/// that has drifted off that origin is one the window no longer covers, and
+/// claiming coverage there would cull the canvas out from under it.
+#[test]
+fn a_camera_drifted_off_the_fullscreen_park_is_no_longer_visually_covered() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    reset_view(&mut f);
+
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    tick_until_settled(&mut f);
+    assert!(
+        f.state().is_output_visually_fullscreen(&output),
+        "precondition: the settled entry covers the output"
+    );
+
+    f.state().with_output_state(|os| os.camera.x += 1.0);
+    assert!(
+        !f.state().is_output_visually_fullscreen(&output),
+        "a camera that drifted off the park origin covers nothing"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The park comparison is exact, not epsilon: it writes integers and exactly
+/// 1.0, so even a sub-pixel drift is a real seam to catch, not rounding noise
+/// to tolerate.
+#[test]
+fn a_subpixel_camera_drift_off_the_fullscreen_park_also_ends_coverage() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    reset_view(&mut f);
+
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    tick_until_settled(&mut f);
+
+    f.state().with_output_state(|os| os.camera.x += 0.001);
+    assert!(
+        !f.state().is_output_visually_fullscreen(&output),
+        "a hair of drift must not be tolerated as rounding noise"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The settled predicate's camera-scoped claim is a conjunction, not just the
+/// camera half of it: a zoom that drifted off 1.0 while the camera stayed
+/// exactly on the park origin must also end the coverage claim — the window is
+/// mapped at zoom 1, so anything else no longer matches what is on screen.
+#[test]
+fn a_zoom_drifted_off_the_fullscreen_park_is_no_longer_visually_covered() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    reset_view(&mut f);
+
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    tick_until_settled(&mut f);
+    assert!(
+        f.state().is_output_visually_fullscreen(&output),
+        "precondition: the settled entry covers the output"
+    );
+
+    f.state().with_output_state(|os| os.zoom += 0.001);
+    assert!(
+        !f.state().is_output_visually_fullscreen(&output),
+        "a zoom that drifted off the park's 1.0 covers nothing, even with the \
+         camera still exactly parked"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
 /// The park to zoom 1 is fullscreen's business, not the scene's: while the
 /// entering window grows, everything behind it keeps rendering through the
 /// pre-fullscreen view, and only follows the park once the window covers the

@@ -279,8 +279,12 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     // Overlay survives a fullscreen output) so `drawn => callback` holds.
     // Recomputed rather than threaded from `compose_frame`: the only unsafe
     // direction is compose drawing while this culls, and nothing between the
-    // two calls moves a predicate that way — lock state only advances its
-    // confirmation bookkeeping, staying `Locked`.
+    // two calls moves a predicate that way. Lock state only advances its
+    // confirmation bookkeeping, staying `Locked`; the fullscreen half also reads
+    // the output's camera, zoom and the window's stage position, and none of what
+    // runs in between writes those — the capture calls on both backends, plus
+    // `refresh_foreign_toplevels` and `refresh_ext_workspaces`, which winit runs
+    // here and udev does not.
     //
     // Scoped to its own block: `layer_map_for_output` below re-locks the same
     // mutex, so holding this one open would deadlock.

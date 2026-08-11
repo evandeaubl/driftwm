@@ -507,7 +507,42 @@ impl DriftWm {
         if self.frozen_fullscreen_cover(output).is_some() {
             return true;
         }
-        self.is_output_fullscreen(output) && self.fullscreen_entry_on(output).is_none()
+        // Resolved here so the parked-camera check takes the window rather than
+        // looking it up again; `fullscreen_entry_on` below still does its own.
+        let Some(entry) = self.stage.fullscreen_on(&output.name()) else {
+            return false;
+        };
+        self.fullscreen_entry_on(output).is_none() && self.camera_parked_on(output, &entry.window)
+    }
+
+    /// Whether `output`'s viewport still sits where `window`'s fullscreen entry
+    /// parked it. The window is mapped *at* that camera origin at zoom 1, so a
+    /// drifted viewport no longer covers it — claiming coverage there would
+    /// cull the canvas from under it and show the clear color. Settled
+    /// counterpart of the frozen picture's camera-scoped claim in
+    /// [`FullscreenCover::view`].
+    ///
+    /// Compared exactly, not with an epsilon: the park writes integers and
+    /// exactly 1.0, so any difference is a real seam, not rounding noise.
+    /// Compared against the window's *stage* position, never its render
+    /// offset — a CSD client's shadow margin leaves that offset non-zero at
+    /// rest, which would read false forever and thrash the background chunk
+    /// caches every frame.
+    ///
+    /// No position for `window` drops the claim. The composer bails on that same
+    /// read *before* it consults the cull, so the covering window is not drawn
+    /// either way — claiming coverage would cull the background, every other
+    /// window and every non-Overlay layer to uncover a picture that is never
+    /// pushed, leaving the output clear-color. The two halves of a fullscreen
+    /// are torn down by different sweeps (`Stage::retain_alive` drops the entry,
+    /// `reap_dead_fullscreen` the map), so a dead fullscreen window can be
+    /// missing from one while the other still names it.
+    fn camera_parked_on(&self, output: &Output, window: &StageWindow) -> bool {
+        let Some(parked) = self.stage.position_of(window) else {
+            return false;
+        };
+        let os = output_state(output);
+        os.zoom == 1.0 && os.camera == parked.to_f64()
     }
 
     /// The frozen fullscreen picture still covering `output` — one held under the
