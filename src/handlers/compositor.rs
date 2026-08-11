@@ -206,22 +206,37 @@ impl CompositorHandler for DriftWm {
         // leaving black artifacts where damage tracking skips redraws.
         // ARGB only — XRGB is handled in RoundedCornerElement::opaque_regions.
         // Skipped for `decoration = "none"` (pass-through promise).
-        let csd_corner_carve = !self
+        if !self
             .decorations
             .contains_key(&DecorationKey::Surface(surface.id()))
-            && {
-                let applied = driftwm::config::applied_rule(surface);
+        {
+            with_states(surface, |states| {
+                // Every commit of every surface lands here, and only toplevels
+                // can carve — bail before the rule read so subsurfaces, popups,
+                // layer surfaces and cursors pay a single data_map lookup.
+                if states.data_map.get::<XdgToplevelSurfaceData>().is_none() {
+                    return;
+                }
+                // `applied_rule` re-enters `with_states`, whose private-data
+                // mutex this closure already holds — read the rule off the
+                // states in hand instead.
+                let applied = states
+                    .data_map
+                    .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                    .and_then(|m| m.lock().ok())
+                    .map(|guard| guard.clone());
                 let mode = driftwm::config::effective_decoration_mode(
                     applied.as_ref().and_then(|r| r.decoration.as_ref()),
                     &self.config.decorations.default_mode,
                 );
-                !matches!(mode, driftwm::config::DecorationMode::None)
-            };
-        if csd_corner_carve {
-            with_states(surface, |states| {
-                if states.data_map.get::<XdgToplevelSurfaceData>().is_none() {
+                if matches!(mode, driftwm::config::DecorationMode::None) {
                     return;
                 }
+                let corner_radius = driftwm::config::effective_corner_radius(
+                    applied.as_ref(),
+                    mode,
+                    &self.config.decorations,
+                );
                 let mut guard = states.cached_state.get::<SurfaceAttributes>();
                 let attrs = guard.current();
                 if let Some(ref mut region) = attrs.opaque_region {
@@ -234,7 +249,7 @@ impl CompositorHandler for DriftWm {
                     else {
                         return;
                     };
-                    let r = self.config.decorations.corner_radius + 2;
+                    let r = corner_radius + 2;
                     if bounds.size.w > 2 * r && bounds.size.h > 2 * r {
                         let (x, y, w, h) =
                             (bounds.loc.x, bounds.loc.y, bounds.size.w, bounds.size.h);
