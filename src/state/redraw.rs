@@ -28,8 +28,6 @@ impl DriftWm {
             root = parent;
         }
 
-        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
-
         if let Some(window) = self.window_for_surface(&root)
             && let Some(win_bbox) = self.window_bbox_with_popups(&window)
         {
@@ -50,7 +48,7 @@ impl DriftWm {
             chrome_bbox.loc.y -= margin;
             chrome_bbox.size.w += 2 * margin;
             chrome_bbox.size.h += 2 * margin;
-            for output in &outputs {
+            for output in self.space.outputs() {
                 let (cam, zoom) = {
                     let os = output_state(output);
                     (os.camera.to_i32_round(), os.zoom)
@@ -78,7 +76,7 @@ impl DriftWm {
                 Some(bbox)
             });
         if let Some(widget_bbox) = widget_bbox {
-            for output in &outputs {
+            for output in self.space.outputs() {
                 let (cam, zoom) = {
                     let os = output_state(output);
                     (os.camera.to_i32_round(), os.zoom)
@@ -92,7 +90,7 @@ impl DriftWm {
             return;
         }
 
-        for output in &outputs {
+        for output in self.space.outputs() {
             let hit = layer_map_for_output(output)
                 .layer_for_surface(&root, WindowSurfaceType::ALL)
                 .is_some();
