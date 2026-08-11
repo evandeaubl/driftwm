@@ -610,4 +610,60 @@ mod tests {
     fn visible_zero_chunk_size() {
         assert!(visible_chunks(rect(0, 0, 100, 100), 0).is_empty());
     }
+
+    fn meta(bytes: u64) -> ChunkMeta {
+        ChunkMeta {
+            bytes,
+            last_touched_frame: 0,
+        }
+    }
+
+    #[test]
+    fn retain_lod_meta_keeps_only_the_given_lod() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(100)),
+            ((1, 0, 0), meta(200)),
+            ((2, 0, 0), meta(300)),
+        ]
+        .into_iter()
+        .collect();
+        retain_lod_meta(&mut m, 2);
+        assert_eq!(m.keys().collect::<Vec<_>>(), vec![&(2, 0, 0)]);
+    }
+
+    #[test]
+    fn retain_lod_meta_returns_the_sum_of_what_survives() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(100)),
+            ((2, 0, 0), meta(300)),
+            ((2, 1, 0), meta(50)),
+        ]
+        .into_iter()
+        .collect();
+        let total = retain_lod_meta(&mut m, 2);
+        assert_eq!(
+            total, 350,
+            "must be the sum of the surviving entries' bytes"
+        );
+        // The whole point: entries survive, so a zeroed counter would
+        // permanently under-report the cache and break budget enforcement.
+        assert_ne!(total, 0);
+    }
+
+    #[test]
+    fn retain_lod_meta_all_finer_than_keep_empties_the_map_and_returns_zero() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> =
+            [((0, 0, 0), meta(100)), ((1, 0, 0), meta(200))]
+                .into_iter()
+                .collect();
+        let total = retain_lod_meta(&mut m, 5);
+        assert_eq!(total, 0);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn retain_lod_meta_empty_map_returns_zero() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = HashMap::new();
+        assert_eq!(retain_lod_meta(&mut m, 0), 0);
+    }
 }

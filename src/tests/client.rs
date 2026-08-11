@@ -24,6 +24,7 @@ use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_output::{self, WlOutput};
 use wayland_client::protocol::wl_pointer::{self, WlPointer};
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
@@ -513,6 +514,10 @@ impl Client {
         self.state.window(surface)
     }
 
+    pub fn set_opaque_region(&mut self, surface: &WlSurface, rects: &[(i32, i32, i32, i32)]) {
+        self.state.set_opaque_region(surface, rects);
+    }
+
     pub fn create_layer(
         &mut self,
         output: Option<&WlOutput>,
@@ -706,6 +711,20 @@ impl State {
             .iter_mut()
             .find(|w| w.surface == *surface)
             .unwrap()
+    }
+
+    /// Set `surface`'s pending opaque region to the union of `rects`
+    /// (surface-local `(x, y, w, h)`), the same request a real CSD client
+    /// issues to declare which part of its buffer is fully opaque. Takes
+    /// effect on the surface's next commit.
+    pub fn set_opaque_region(&mut self, surface: &WlSurface, rects: &[(i32, i32, i32, i32)]) {
+        let compositor = self.compositor.as_ref().unwrap();
+        let region = compositor.create_region(&self.qh, ());
+        for &(x, y, w, h) in rects {
+            region.add(x, y, w, h);
+        }
+        surface.set_opaque_region(Some(&region));
+        region.destroy();
     }
 
     pub fn create_layer(
@@ -1500,6 +1519,19 @@ impl Dispatch<WlCompositor, ()> for State {
         _state: &mut Self,
         _proxy: &WlCompositor,
         _event: <WlCompositor as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<WlRegion, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlRegion,
+        _event: <WlRegion as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
