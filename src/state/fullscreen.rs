@@ -318,9 +318,11 @@ impl DriftWm {
             // pointer focus, so there is nothing to re-seat. Take the relocation
             // silently and leave the lock standing: dropping it to send the
             // motion below would hand the client an absolute jump it never made,
-            // which a game reads as camera movement. `warp_pointer` treats a
-            // locked cursor the same way. A confine is excluded — that cursor
-            // really moves, so it needs the motion.
+            // which a game reads as camera movement. A confine falls through and
+            // takes the motion instead — that cursor really moves, and nothing
+            // re-seats it afterwards. `warp_pointer` and `flush_pointer_resync`
+            // stay silent for a confine as well, so this is the only site that
+            // separates the two.
             if self.locked_to(&wl_surface) {
                 pointer.set_location(new_pos);
                 return;
