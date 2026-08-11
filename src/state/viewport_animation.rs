@@ -147,13 +147,13 @@ impl DriftWm {
         pointer
             .current_focus()
             .is_some_and(|focus| focus.0 == *surface)
-            && self.pointer_locked()
+            && self.pointer_constraint_locked()
     }
 
     /// Whether the focused surface holds an active *lock*, as opposed to a
     /// confine. Only a lock freezes the cursor, so only a lock makes an
     /// absolute motion a position the client never moved to.
-    pub(crate) fn pointer_locked(&self) -> bool {
+    pub(crate) fn pointer_constraint_locked(&self) -> bool {
         use smithay::wayland::pointer_constraints::PointerConstraint;
         let pointer = self.seat.get_pointer().unwrap();
         pointer.current_focus().is_some_and(|focus| {

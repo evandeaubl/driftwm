@@ -725,7 +725,9 @@ impl DriftWm {
         // the cursor strands the lock, so that falls through to clear it.
         // Confines are excluded — that cursor really moves, and suppressing the
         // re-seat would leave it measured against a stale surface origin.
-        if self.pointer_locked() && under.as_ref().map(|(focus, _)| focus) == old_focus.as_ref() {
+        if self.pointer_constraint_locked()
+            && under.as_ref().map(|(focus, _)| focus) == old_focus.as_ref()
+        {
             return;
         }
         let serial = SERIAL_COUNTER.next_serial();

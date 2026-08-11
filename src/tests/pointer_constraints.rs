@@ -179,7 +179,7 @@ fn fullscreening_a_locked_game_leaves_its_lock_untouched() {
     f.double_roundtrip(id);
 
     assert!(
-        f.state().pointer_locked(),
+        f.state().pointer_constraint_locked(),
         "the game's lock must survive the fullscreen entry"
     );
     assert_eq!(
