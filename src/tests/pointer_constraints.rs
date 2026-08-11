@@ -373,7 +373,8 @@ fn a_lock_recreated_after_the_cursor_left_does_not_arm() {
     // lock it is supposed to drop.
     let window = window_by_app_id(&mut f, "game").unwrap();
     let above_left = f.state().stage.position_of(&window).unwrap().to_f64();
-    f.state().warp_pointer(above_left - Point::from((100.0, 100.0)));
+    f.state()
+        .warp_pointer(above_left - Point::from((100.0, 100.0)));
     assert!(
         !f.state().pointer_constraint_active(),
         "the warp must drop the lock it left behind, or this scenario tests \
