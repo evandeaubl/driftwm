@@ -1826,8 +1826,11 @@ fn fullscreen_backdrop_element(
                 return false;
             }
             // The window push site multiplies this by an animation's
-            // `visual_alpha`; here it can't matter, because an in-flight entry
-            // is exactly what makes the output read as not visually fullscreen.
+            // `visual_alpha`, which is deliberately not read here: the frozen
+            // picture an exit holds does reach this loop mid-animation, but a
+            // freeze holds alpha at 1 by construction, and the growing entry
+            // that would not is exactly what makes the output read as not
+            // visually fullscreen in the first place.
             window
                 .wl_surface()
                 .and_then(|s| driftwm::config::applied_rule(&s))

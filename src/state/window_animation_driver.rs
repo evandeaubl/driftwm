@@ -1134,7 +1134,7 @@ impl DriftWm {
     /// picks screen-space placement on that output (or the pin's output when
     /// pinned) vs. canvas space otherwise, offset by `fullscreen_centre` for a
     /// window that under-filled the output and was centred in it. That offset is
-    /// a parameter because every caller tears the fullscreen entry down before
+    /// a parameter because the close paths tear the fullscreen entry down before
     /// getting here — it has to be read while the entry still exists, alongside
     /// the output itself. `alpha_only` fades in place at scale 1, for the
     /// suspend-conversion crossfade.

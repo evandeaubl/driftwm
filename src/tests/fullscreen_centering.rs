@@ -5,16 +5,18 @@
 //! output as covered even though the window no longer sits exactly on the
 //! camera origin.
 //!
-//! Every "answers with a smaller size" scenario here picks an answer size that
-//! differs from the size the window was mapped at, never a bare re-commit of
-//! the same buffer: `WindowAnimations::on_window_commit` only resolves the
-//! fullscreen-entry chase's outstanding request on a commit whose size
-//! actually changes (or matches the offer exactly) — a size-for-size identical
-//! re-commit reads as "nothing new happened" and never registers as an answer.
-//! A real client that never changes its buffer size across the whole fullscreen
-//! cycle would see the same real-time endpoint-hold degrade every other frozen
-//! resize does; that path is exercised elsewhere and is not what these
-//! scenarios are pinning.
+//! Two answer shapes appear here and they behave differently on the way in. A
+//! client that answers at a size it was not already at resolves the
+//! fullscreen-entry chase immediately; one that answers by re-committing the
+//! size it already had does not, because
+//! `WindowAnimations::on_window_commit` reads a size-for-size identical commit
+//! as "nothing new happened". Both are centred at once — the centring is
+//! deliberately not gated on that chase — but only the first reads as covering
+//! the output straight away; the second waits out the entry animation's
+//! real-time endpoint hold, which is why the scenarios that assert coverage for
+//! it drive the clock rather than `tick_until_settled`.
+
+use std::time::{Duration, Instant};
 
 use smithay::desktop::Window;
 use smithay::output::Output;
@@ -22,6 +24,8 @@ use smithay::utils::Point;
 
 use super::client::ClientId;
 use super::{Fixture, adopt_last_configure, map_window, tick_until_settled, window_by_app_id};
+
+const TICK: Duration = Duration::from_millis(16);
 
 /// A window mapped at `map_size` on a fresh `1920x1080` output, then made
 /// fullscreen on it. The client has not yet answered the fullscreen configure.
@@ -175,11 +179,7 @@ fn an_unacked_fullscreen_commit_does_not_centre_the_window() {
     // A differently-sized commit with no ack: registers as an answer to the
     // *chase*, but the fullscreen configure itself is still outstanding.
     f.double_roundtrip(id);
-    let client_window = f.client(id).window(&surface);
-    client_window.set_size(800, 600);
-    client_window.attach_new_buffer();
-    client_window.commit();
-    f.double_roundtrip(id);
+    commit_at(&mut f, id, &surface, (800, 600));
 
     assert_eq!(
         window.geometry().size,
@@ -223,6 +223,28 @@ fn a_fixed_size_client_that_re_commits_its_own_size_is_still_centred() {
         position - camera,
         Point::from((560, 240)),
         "a client that answers with the size it already had is centred like any other"
+    );
+    assert_eq!(
+        f.state()
+            .stage
+            .fullscreen_on(&output.name())
+            .unwrap()
+            .centre_offset,
+        Point::from((560, 240)),
+        "and the move is recorded, without which the cull gate loses the output"
+    );
+
+    // Its entry chase never saw an answer, so it holds on a real-time deadline
+    // `tick_until_settled` cannot reach. Start the clock past that deadline and
+    // run the leg out from there.
+    let base = Instant::now() + Duration::from_millis(600);
+    for step in 0..200 {
+        f.state()
+            .tick_window_animations_at(TICK, base + TICK * step);
+    }
+    assert!(
+        f.state().is_output_visually_fullscreen(&output),
+        "the cull gate reads a centred fixed-size client as covering its output"
     );
 
     f.state().exit_fullscreen_on(&output);

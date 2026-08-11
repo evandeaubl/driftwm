@@ -57,12 +57,14 @@ impl CompositorHandler for DriftWm {
         // (`reap_dead_fullscreen` below still tears the entry down).
         if let Some(window) = self.window_for_surface(surface) {
             let fs_output = self.find_fullscreen_output_for_surface(surface);
-            let fs_centre = fs_output
-                .as_ref()
-                .and_then(|output| self.stage.fullscreen_on(&output.name()))
-                .map(|entry| entry.centre_offset)
-                .unwrap_or_default();
-            self.snapshot_closing_window(&window, surface, fs_output.as_ref(), fs_centre, false);
+            let fullscreen_centre = self.fullscreen_centre_of(fs_output.as_ref());
+            self.snapshot_closing_window(
+                &window,
+                surface,
+                fs_output.as_ref(),
+                fullscreen_centre,
+                false,
+            );
         }
         self.cleanup_surface_state(surface);
         // lock_surfaces is keyed by output — sweep values.

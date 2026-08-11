@@ -639,7 +639,28 @@ impl DriftWm {
         // focus and surface origin are stale: without this the client keeps
         // receiving coordinates from where the window used to be until the user
         // moves the mouse. The fullscreen exit re-seats for the same reason.
-        self.refresh_pointer_focus();
+        //
+        // Except under a pointer lock, which is the one case where re-seating
+        // does harm. A locked cursor is frozen and the client reads only relative
+        // motion, so there is no absolute position to correct — but the window
+        // moving out from under that frozen cursor makes the re-pick land on a
+        // different surface, and `refresh_pointer_focus`'s own lock guard only
+        // covers an *unchanged* focus. The leave it would send tears down the
+        // lock, on exactly the fullscreen games this centring is for.
+        if !self.pointer_constraint_locked() {
+            self.refresh_pointer_focus();
+        }
+    }
+
+    /// How far the fullscreen window on `output` sits from the origin its park
+    /// put it at. Read this *before* tearing the entry down — the close paths
+    /// all need it after they have, which is what the parameter on
+    /// `snapshot_closing_window` is for.
+    pub fn fullscreen_centre_of(&self, output: Option<&Output>) -> Point<i32, Logical> {
+        output
+            .and_then(|o| self.stage.fullscreen_on(&o.name()))
+            .map(|entry| entry.centre_offset)
+            .unwrap_or_default()
     }
 
     /// Find which output holds a fullscreen window by its surface.
