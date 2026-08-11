@@ -461,6 +461,7 @@ render_elements! {
     AnimatedChrome=WindowTransformElement<RescaleRenderElement<PixelShaderElement>>,
     ClosingWindow=WindowTransformElement<TextureRenderElement<GlesTexture>>,
     Layer=WaylandSurfaceRenderElement<GlesRenderer>,
+    Backdrop=smithay::backend::renderer::element::solid::SolidColorRenderElement,
     Cursor=MemoryRenderBufferRenderElement<GlesRenderer>,
     CursorSurface=smithay::backend::renderer::element::Wrap<WaylandSurfaceRenderElement<GlesRenderer>>,
     Blur=TextureRenderElement<GlesTexture>,
