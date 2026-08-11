@@ -39,6 +39,9 @@ use wayland_protocols::ext::workspace::v1::client::{
     ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
     ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
 };
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_confined_pointer_v1::{
+    self, ZwpConfinedPointerV1,
+};
 use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_locked_pointer_v1::{
     self, ZwpLockedPointerV1,
 };
@@ -591,6 +594,13 @@ impl Client {
         self.state.lock_pointer(surface)
     }
 
+    /// Confine the pointer to `surface` with a persistent lifetime and no
+    /// region, i.e. to the whole surface. Unlike a lock, the cursor keeps
+    /// moving inside it.
+    pub fn confine_pointer(&mut self, surface: &WlSurface) -> ZwpConfinedPointerV1 {
+        self.state.confine_pointer(surface)
+    }
+
     /// Send `ext_session_lock_manager_v1.lock`, entering
     /// `SessionLockHandler::lock` on the compositor. The created lock object
     /// is tracked as this client's most recent [`Lock`]; its `locked`/
@@ -887,6 +897,12 @@ impl State {
         let constraints = self.pointer_constraints.as_ref().unwrap();
         let pointer = self.pointer.as_ref().unwrap();
         constraints.lock_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
+    }
+
+    pub fn confine_pointer(&mut self, surface: &WlSurface) -> ZwpConfinedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        constraints.confine_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
     }
 
     pub fn lock_session(&mut self) {
@@ -1798,6 +1814,23 @@ impl Dispatch<ZwpLockedPointerV1, ()> for State {
         match event {
             zwp_locked_pointer_v1::Event::Locked => (),
             zwp_locked_pointer_v1::Event::Unlocked => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<ZwpConfinedPointerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpConfinedPointerV1,
+        event: <ZwpConfinedPointerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_confined_pointer_v1::Event::Confined => (),
+            zwp_confined_pointer_v1::Event::Unconfined => (),
             _ => unreachable!(),
         }
     }
