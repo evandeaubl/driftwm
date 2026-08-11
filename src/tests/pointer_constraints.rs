@@ -258,7 +258,6 @@ fn fullscreening_a_locked_game_still_relocates_its_cursor() {
     f.state().set_zoom(0.5);
     let panned = f.state().camera() + Point::from((100.0, 50.0));
     f.state().set_camera(panned);
-    f.skip_baseline_check(); // the pan above populates blur_camera_generation
     let _lock = lock_pointer_over(&mut f, id, &surface);
 
     let camera_before = f.state().camera();

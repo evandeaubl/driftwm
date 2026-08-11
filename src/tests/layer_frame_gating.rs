@@ -428,7 +428,6 @@ fn a_window_still_follows_the_on_screen_off_screen_geometry_rule() {
         "precondition: the window starts on-screen"
     );
 
-    f.skip_baseline_check(); // panning below populates blur_camera_generation
     f.state().set_camera(Point::from((100_000.0, 100_000.0)));
     f.state().update_output_from_camera();
 
