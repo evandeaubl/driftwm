@@ -27,15 +27,15 @@ impl DriftWm {
     /// animation tick (momentum, edge-pan, zoom, camera) routes through here, so
     /// none can move a fullscreen output's camera.
     ///
-    /// Interactive pan/zoom writers are split. `drift_pan_on`, the touch grab's
-    /// zoom and the pinch's pinned-output branch write output_state directly and
-    /// each carry their own copy of this check; the pinch's fallback branch, for
-    /// a gesture with no pinned output, comes back through `set_camera` /
-    /// `set_zoom` and is covered here. A gesture that *begins* while the output
-    /// is already fullscreen exits it first, so the common case reaches no guard
-    /// at all — but fullscreen landing mid-gesture inverts that ordering, which
-    /// is what the direct writers' own guards exist for. Do not read this lock as
-    /// covering them.
+    /// Interactive pan/zoom writers do not rely on this lock. `drift_pan_on`,
+    /// the touch grab's zoom and the pinch both guard themselves, up front and
+    /// per gesture — the pinch bails for its whole arm before either of its
+    /// branches runs, so the `set_camera` / `set_zoom` its no-pinned-output
+    /// fallback would reach are a dead backstop rather than the check doing the
+    /// work. A gesture that *begins* while the output is already fullscreen exits
+    /// it first, so the common case reaches no guard at all — but fullscreen
+    /// landing mid-gesture inverts that ordering, which is what those local
+    /// guards exist for. Do not read this lock as covering them.
     ///
     /// Invariant: a fullscreen window is parked at its output's camera-origin at
     /// zoom 1, so the camera must not move or it slides off (0,0) and re-exposes

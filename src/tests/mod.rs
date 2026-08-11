@@ -81,10 +81,18 @@ const MAX_TICKS: usize = 600;
 
 /// Run both viewport animations to completion, in the order a real frame loop
 /// ticks them (zoom first, so the camera uses the recomputed target).
+///
+/// The per-frame fullscreen disarm is part of that order, not an optimization:
+/// `set_zoom` refuses on a fullscreen output, so `apply_zoom_animation` can never
+/// retire a `zoom_target` armed there and a loop without the disarm would spin to
+/// the panic below instead of settling.
 fn settle(f: &mut Fixture) {
     for _ in 0..MAX_TICKS {
         if f.state().camera_target().is_none() && f.state().zoom_target().is_none() {
             return;
+        }
+        if let Some(output) = f.state().active_output() {
+            f.state().disarm_view_flight_on_fullscreen(&output);
         }
         f.state().apply_zoom_animation(TICK);
         f.state().apply_camera_animation(TICK);
