@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Once;
 use std::time::Duration;
 
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -785,6 +785,11 @@ pub fn init_udev(
                     // VBlanks for pre-switch frames never arrive, so nothing
                     // would ever retire their provenance either.
                     data.frames_pending.clear();
+                    // Whatever wedged the GPU has had a suspend/resume or a VT
+                    // round-trip to clear, and the first frame back is the
+                    // slowest of the session — the tier that survived the switch
+                    // would be the one most likely to cut it short.
+                    data.fence_failures.clear();
                     data.clear_lock_frames();
                     for (_, token) in data.estimated_vblank_timers.drain() {
                         data.loop_handle.remove(token);
@@ -896,6 +901,7 @@ pub fn init_udev(
                                         teardown_output(data, surface, is_last);
                                     }
                                     data.frames_pending.remove(&crtc);
+                                    data.fence_failures.remove(&crtc);
                                     data.forget_lock_frame(crtc);
                                     if let Some(token) = data.estimated_vblank_timers.remove(&crtc)
                                     {
@@ -1309,24 +1315,37 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
     data.active_outputs.remove(&output);
 }
 
-/// How long to wait on a render fence the first time it doesn't come back.
+/// How long to wait on a render fence that has been coming back normally.
 ///
 /// Sits well above even a pathological composite (4K, blurred, full-output
 /// redraw, several monitors in one pass): tripping this on a merely slow frame
-/// would trade a stall for a corrupt one.
+/// would trade a stall for a corrupt one. It bounds each signal-free interval
+/// rather than the call — Mesa's native-fence path ends in libsync's
+/// `sync_wait`, which restarts `poll` with the full timeout on every `EINTR`.
 const FENCE_WAIT_BUDGET: Duration = Duration::from_secs(2);
 
-/// What to wait once a fence has already missed [`FENCE_WAIT_BUDGET`]. The
-/// "might just be slow" reading is spent by then, and the loop is rendering
-/// every output serially — at the full budget a wedged GPU leaves under a
-/// percent of the loop for the VT switch this bound exists to permit.
+/// Budget after a single miss. Still far above any real frame: one miss is as
+/// easily a GPU climbing out of a power state or a kernel-recovered hang as a
+/// wedge, and dropping straight to [`FENCE_WAIT_WEDGED`] would let a legitimate
+/// 60ms frame hold the output in the wedged tier from then on.
+const FENCE_WAIT_SUSPECT: Duration = Duration::from_millis(250);
+
+/// Budget once a fence has missed twice running. The "might just be slow"
+/// reading is spent by then, and the loop is rendering every output serially —
+/// at the full budget a wedged GPU leaves under a percent of the loop for the VT
+/// switch this bound exists to permit.
 const FENCE_WAIT_WEDGED: Duration = Duration::from_millis(50);
 
-/// Whether the fence is currently failing, latched across frames. The condition
-/// persists while the GPU is wedged and the subscriber logs synchronously on
-/// this thread, so warning per frame would itself cost frames. Cleared on the
-/// first success, so a later episode is reported again rather than swallowed.
-static FENCE_FAILING: AtomicBool = AtomicBool::new(false);
+/// How often a wait in the wedged tier is taken at [`FENCE_WAIT_SUSPECT`]
+/// instead. Every wait in that tier misses by construction once the GPU is
+/// merely slower than its budget, so without a periodically longer one an output
+/// that came back as slow-but-working would flip early forever.
+const FENCE_REPROBE_INTERVAL: u32 = 8;
+
+/// A fence kind the budget can't be applied to has been seen. Unlike the
+/// per-CRTC failure counts this is a property of the build, not of a GPU, so one
+/// report for the process is all it can ever be worth.
+static UNKNOWN_FENCE_SEEN: Once = Once::new();
 
 /// Wait for the GPU to finish the frame, but never indefinitely.
 ///
@@ -1344,35 +1363,61 @@ static FENCE_FAILING: AtomicBool = AtomicBool::new(false);
 /// Only bounds the wait it can see: when the renderer can't export a fence at
 /// all, smithay falls back to `glFinish` inside `render_frame`, which has
 /// already returned by the time this runs.
-fn wait_for_fence(sync: &SyncPoint, output: &Output) {
-    // A sync point with no fence waits on nothing. Every other kind is
-    // unreachable here: the swapchain's fence comes from the GLES renderer,
-    // which produces an EGL fence or none at all.
+fn wait_for_fence(data: &mut DriftWm, crtc: crtc::Handle, sync: &SyncPoint, output: &Output) {
     let Some(fence) = sync.get::<EGLFence>() else {
+        // A sync point with no fence waits on nothing, but one holding a kind we
+        // can't downcast to still has to be awaited: skipping it would tear with
+        // nothing in the log to say why. Unreachable with the pinned smithay —
+        // the swapchain's fence comes from the GLES renderer, which produces an
+        // EGL fence or none — so this only fires after a bump.
+        if sync.contains_fence() {
+            UNKNOWN_FENCE_SEEN.call_once(|| {
+                tracing::warn!(
+                    "render fence on {} is not an EGL fence — waiting on it unbounded, which \
+                     a wedged GPU can turn into a session that needs a power cycle",
+                    output.name()
+                );
+            });
+            let _ = sync.wait();
+        }
         return;
     };
-    let budget = if FENCE_FAILING.load(Ordering::Relaxed) {
-        FENCE_WAIT_WEDGED
-    } else {
-        FENCE_WAIT_BUDGET
+    let failures = data.fence_failures.get(&crtc).copied().unwrap_or(0);
+    let budget = match failures {
+        0 => FENCE_WAIT_BUDGET,
+        n if n == 1 || n % FENCE_REPROBE_INTERVAL == 0 => FENCE_WAIT_SUSPECT,
+        _ => FENCE_WAIT_WEDGED,
     };
+    // Deliberately no retry on `Err`: EGL has no interrupted status, so this
+    // fails only on a real EGL error, and a retry loop would hand back the whole
+    // budget on every pass — the unbounded wait this exists to remove.
     let failed = match fence.client_wait(Some(budget), true) {
         Ok(true) => false,
         Ok(false) => {
-            report_fence_failure(output, &format!("still unsignalled after {budget:?}"));
+            report_fence_failure(
+                output,
+                &format!("still unsignalled after {budget:?}"),
+                failures == 0,
+            );
             true
         }
         Err(err) => {
-            report_fence_failure(output, &format!("wait failed: {err}"));
+            report_fence_failure(output, &format!("wait failed: {err}"), failures == 0);
             true
         }
     };
-    FENCE_FAILING.store(failed, Ordering::Relaxed);
+    if failed {
+        data.fence_failures.insert(crtc, failures + 1);
+    } else {
+        data.fence_failures.remove(&crtc);
+    }
 }
 
 /// Warn on the frame a fence starts failing, then stay quiet until it recovers.
-fn report_fence_failure(output: &Output, what: &str) {
-    if FENCE_FAILING.load(Ordering::Relaxed) {
+/// The condition persists while the GPU is wedged and the subscriber writes
+/// synchronously on this thread, so warning per frame would itself cost frames.
+fn report_fence_failure(output: &Output, what: &str, first: bool) {
+    if !first {
         tracing::debug!("render fence on {}: {what}", output.name());
         return;
     }
@@ -1540,7 +1585,7 @@ fn render_frame(
             data.config.backend.wait_for_frame_completion,
             element.sync.contains_fence(),
         );
-        wait_for_fence(&element.sync, output);
+        wait_for_fence(data, crtc, &element.sync, output);
     }
 
     match render_result {

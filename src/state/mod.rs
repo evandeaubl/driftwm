@@ -940,6 +940,11 @@ pub struct DriftWm {
     /// One-shot timers armed when queue_frame returned EmptyFrame so the loop
     /// still wakes at ~refresh rate to advance animations (e.g. xcursor frames).
     pub estimated_vblank_timers: HashMap<crtc::Handle, RegistrationToken>,
+    /// Consecutive render-fence timeouts per CRTC, driving the udev backend's
+    /// escalating wait budget. Per-CRTC because one wedged output among several
+    /// must not have its budget reset by its healthy neighbours in the same
+    /// render pass. No entry is a fence that came back on its last frame.
+    pub fence_failures: HashMap<crtc::Handle, u32>,
     /// Backstop for a lock confirmation that never gets its frames presented —
     /// see `LOCK_CONFIRM_TIMEOUT`.
     pub lock_confirm_timer: Option<RegistrationToken>,

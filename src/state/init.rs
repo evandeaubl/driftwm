@@ -400,6 +400,7 @@ impl DriftWm {
             redraws_needed: HashSet::new(),
             frames_pending: HashSet::new(),
             estimated_vblank_timers: HashMap::new(),
+            fence_failures: HashMap::new(),
             lock_confirm_timer: None,
             lock_frame_queued: HashSet::new(),
             lock_frame_on_screen: HashSet::new(),
