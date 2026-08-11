@@ -735,9 +735,12 @@ pub fn compose_frame(
     };
     let mut did_init_bg = false;
     if output_fullscreen {
-        // Fullscreen fully occludes the canvas: free its chunk caches and skip
-        // the background. Maximize is NOT fullscreen, so it keeps its background.
-        state.render.remove_background_chunks(&name);
+        // Fullscreen fully occludes the canvas: free the bulk of its chunk
+        // caches and skip the background. Shrunk rather than removed, so the
+        // branch below stays unreachable for this output and the exit frame has
+        // no synchronous rebuild to pay for. Maximize is NOT fullscreen, so it
+        // keeps its background.
+        state.render.shrink_background_for_fullscreen(&name);
     } else if !state.render.cached_bg.contains_key(&name)
         && !state.render.cached_tile_chunks.contains_key(&name)
         && !state.render.cached_shader_chunks.contains_key(&name)

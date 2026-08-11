@@ -1324,6 +1324,24 @@ impl DriftWm {
                 "cached_shader_chunks",
                 self.render.cached_shader_chunks.len(),
             ),
+            // Both stay at 0 for a fullscreen output: pending work there keeps
+            // the udev scheduler marking it dirty every vblank.
+            (
+                "bg_chunk_loads_in_flight",
+                self.render
+                    .cached_tile_chunks
+                    .values()
+                    .map(|c| c.in_flight_len())
+                    .sum(),
+            ),
+            (
+                "shader_chunk_caches_pending",
+                self.render
+                    .cached_shader_chunks
+                    .values()
+                    .filter(|c| c.has_pending_bakes())
+                    .count(),
+            ),
             ("cached_error_bar", self.render.cached_error_bar.len()),
             ("cached_outlines", self.render.cached_outlines.len()),
             (

@@ -132,13 +132,29 @@ impl RenderCache {
             .retain(|_, cs| now.saturating_sub(cs.last_used) <= MAX_IDLE);
     }
 
-    /// Drop the large per-output chunk caches (shader-bake + gigapixel TIFF),
-    /// freeing hundreds of MB of GPU textures. Single-texture tile/wallpaper
-    /// caches stay (cheap; re-decoding on exit would hitch). `compose_frame`
-    /// lazily rebuilds the chunk caches on the first non-fullscreen frame.
+    /// Destroy the per-output chunk caches (shader-bake + gigapixel TIFF). For
+    /// identity changes only — output disconnect/remap, scale or transform
+    /// changes, config reload — where the cache's own geometry is what went
+    /// stale. `compose_frame` rebuilds it synchronously on the first
+    /// non-fullscreen frame, which for a gigapixel TIFF is a whole-LOD decode
+    /// and six thread spawns; use [`Self::shrink_background_for_fullscreen`]
+    /// for the transient case.
     pub fn remove_background_chunks(&mut self, output_name: &str) {
         self.cached_tile_chunks.remove(output_name);
         self.cached_shader_chunks.remove(output_name);
+    }
+
+    /// Free the bulk of the chunk caches while a fullscreen window occludes the
+    /// canvas, keeping the never-blank cover plane and (TIFF) the decoder pool.
+    /// The caches stay in their maps, so there is no rebuild on the exit frame —
+    /// which is where the cost of destroying them lands.
+    pub fn shrink_background_for_fullscreen(&mut self, output_name: &str) {
+        if let Some(cache) = self.cached_tile_chunks.get_mut(output_name) {
+            cache.shrink();
+        }
+        if let Some(cache) = self.cached_shader_chunks.get_mut(output_name) {
+            cache.shrink();
+        }
     }
 
     /// Drop `output_name`'s blur textures: the per-window caches, the shared
