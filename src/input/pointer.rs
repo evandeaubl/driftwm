@@ -1418,26 +1418,34 @@ impl DriftWm {
                         let s = self.config.trackpad_speed;
                         let canvas_delta: Point<f64, smithay::utils::Logical> =
                             Point::from((h * s / self.zoom(), v * s / self.zoom()));
-                        self.drift_pan(canvas_delta, Event::time_msec(&event));
-                        let new_pos = pos + canvas_delta;
-                        let serial = SERIAL_COUNTER.next_serial();
-                        // Suspended-aware cascade: a stand-in under the panned
-                        // cursor yields no focus, matching a real motion. Uses
-                        // the pick variant — routing only the obvious motion
-                        // sites would let this re-dispatch restore client focus
-                        // on every scroll event, undoing the pick guard.
-                        let screen_pos =
-                            canvas_to_screen(CanvasPos(new_pos), self.camera(), self.zoom()).0;
-                        let under = self.pointer_focus_under_pick(screen_pos, new_pos);
-                        pointer.motion(
-                            self,
-                            under,
-                            &MotionEvent {
-                                location: new_pos,
-                                serial,
-                                time: Event::time_msec(&event),
-                            },
-                        );
+                        let canvas_delta = self.drift_pan(canvas_delta, Event::time_msec(&event));
+                        // Zero means the camera did not move: a fullscreen output
+                        // refusing the pan, a `trackpad_speed` of 0, or no active
+                        // output to pan. The cursor is where it already was, so
+                        // dispatching would only flush a same-position event and
+                        // re-run the hit test — in the fullscreen case, over a
+                        // scene the cull has already removed.
+                        if canvas_delta.x != 0.0 || canvas_delta.y != 0.0 {
+                            let new_pos = pos + canvas_delta;
+                            let serial = SERIAL_COUNTER.next_serial();
+                            // Suspended-aware cascade: a stand-in under the panned
+                            // cursor yields no focus, matching a real motion. Uses
+                            // the pick variant — routing only the obvious motion
+                            // sites would let this re-dispatch restore client focus
+                            // on every scroll event, undoing the pick guard.
+                            let screen_pos =
+                                canvas_to_screen(CanvasPos(new_pos), self.camera(), self.zoom()).0;
+                            let under = self.pointer_focus_under_pick(screen_pos, new_pos);
+                            pointer.motion(
+                                self,
+                                under,
+                                &MotionEvent {
+                                    location: new_pos,
+                                    serial,
+                                    time: Event::time_msec(&event),
+                                },
+                            );
+                        }
                     } else if source == AxisSource::Finger {
                         // amount(axis) == Some(0.0) or None → finger lifted, launch momentum
                         self.launch_momentum();

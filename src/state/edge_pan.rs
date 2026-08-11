@@ -114,6 +114,12 @@ impl DriftWm {
 
     /// Resolve monitor-boundary latency on the frame tick. Non-monitor-facing
     /// components remain immediate, including at mixed inner/outer corners.
+    ///
+    /// A fullscreen output has no effective velocity: its camera is locked
+    /// (see `set_camera_on`), and the caller's compensating pointer warp
+    /// would otherwise walk the cursor off the parked window. Answered here
+    /// rather than at each tick so the two can't disagree. The request stays
+    /// armed and resumes once fullscreen exits.
     pub(super) fn effective_edge_pan_velocity(
         &self,
         output: &Output,
@@ -124,6 +130,15 @@ impl DriftWm {
         let requested = os.edge_pan_velocity?;
         let screen_pos = os.edge_pan_screen_pos?;
         drop(os);
+        // Below the arming check, which is the common case and free: the
+        // fullscreen lookup allocates the output name, and every output would pay
+        // it every frame if it ran first. `edge_pan_delay` is left as it stands —
+        // an armed delay keeps its `entered_at` frozen across the whole
+        // fullscreen session, so a monitor-facing edge held throughout is already
+        // past its latency when the exit lets the pan resume.
+        if self.is_output_fullscreen(output) {
+            return None;
+        }
         let monitor_edges = self.monitor_facing_edges_at(output, screen_pos);
         let mut os = output_state(output);
         let mut immediate = requested;

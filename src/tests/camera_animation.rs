@@ -19,10 +19,15 @@ use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 
 use driftwm::config::{Action, BTN_LEFT, Config, Direction};
 
+use crate::grabs::PanGrab;
 use crate::state::{StageWindow, ZoomAnimationAnchor, output_state};
 
 use super::client::ClientId;
-use super::{Fixture, end_grab, map_window, motion, window_by_app_id};
+use super::input_backend::{
+    FakeDevice, pointer_relative_motion, pointer_relative_motion_at, pointer_to, press, release,
+    touch_down, touch_motion, touch_up,
+};
+use super::{Fixture, end_grab, map_window, motion, window_by_app_id, window_position};
 
 const TICK: Duration = Duration::from_millis(16);
 const MAX_TICKS: usize = 600;
@@ -1062,4 +1067,400 @@ fn launching_one_output_leaves_anothers_pending_launch_armed() {
         coasting(&out2),
         "so the burst still gets the auto-launch it was waiting for"
     );
+}
+
+/// A fullscreen window is parked at its output's camera; a drag that outlives
+/// the entry must not slide it off. Motion after the park leaves both the
+/// camera and the window exactly where the park put them, a release banks no
+/// fling from the frozen portion of the drag, and a later exit restores the
+/// camera the drag interrupted rather than the rounded park value.
+#[test]
+fn fullscreen_mid_pan_grab_freezes_the_camera_and_release_banks_no_fling() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    // Non-integer, so the park (which rounds) is a different value than the
+    // camera the exit must restore — an integer start would make the two
+    // indistinguishable and the exit assertion below trivially true either way.
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((120.3, 45.7));
+        os.zoom = 1.0;
+    });
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((3000, 3000)),
+        true,
+    );
+    let pre_fullscreen_camera = f.state().camera();
+
+    let device = FakeDevice::mouse();
+    pointer_to(&mut f, &device, Point::from((200.0, 100.0)));
+    press(&mut f, &device, BTN_LEFT);
+    assert!(
+        f.state()
+            .seat
+            .get_pointer()
+            .unwrap()
+            .with_grab(|_, g| g.is::<PanGrab>())
+            .unwrap_or(false),
+        "precondition: a press on empty canvas starts a PanGrab"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    let parked_camera = f.state().camera();
+    assert_ne!(
+        parked_camera, pre_fullscreen_camera,
+        "precondition: the park rounded the camera to a different value"
+    );
+    assert_eq!(
+        window_position(&mut f, &window),
+        parked_camera.to_i32_round(),
+        "precondition: the fullscreen park mapped the window at the camera origin"
+    );
+
+    // Pinned timestamps 10 ms apart: the fling assertion below only bites while
+    // both motions stay inside the velocity window, and the shared clock cannot
+    // promise that under parallel threads.
+    pointer_relative_motion_at(&mut f, &device, Point::from((80.0, -40.0)), 1_000);
+    pointer_relative_motion_at(&mut f, &device, Point::from((-30.0, 90.0)), 1_010);
+    assert_eq!(
+        f.state().camera(),
+        parked_camera,
+        "further drag motion after fullscreen lands must not move the locked camera"
+    );
+    assert_eq!(
+        window_position(&mut f, &window),
+        parked_camera.to_i32_round(),
+        "and the window must stay exactly where the park put it"
+    );
+
+    release(&mut f, &device, BTN_LEFT);
+    // `launch()` always flips `coasting` true and lets the next tick judge the
+    // velocity — with the tracker never accumulated, that tick finds zero and
+    // clears it right back.
+    f.state().tick_all_animations();
+    assert!(
+        !coasting(&output),
+        "the release must bank no momentum for a drag that only ran while frozen"
+    );
+    assert_eq!(
+        f.state().camera(),
+        parked_camera,
+        "no fling appeared on release"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+    assert_eq!(
+        f.state().camera(),
+        pre_fullscreen_camera,
+        "exiting restores the camera the drag was interrupted at, not the rounded park value"
+    );
+}
+
+/// The compensating pointer warp only makes sense because the pan it offsets
+/// moves the camera. Once fullscreen locks the camera, the warp must go
+/// inert too, or the cursor slides opposite the drag while the camera sits
+/// still.
+#[test]
+fn a_live_pan_grabs_pointer_does_not_drift_once_fullscreen_locks_the_camera() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    origin_view(&mut f);
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((3000, 3000)),
+        true,
+    );
+
+    let device = FakeDevice::mouse();
+    pointer_to(&mut f, &device, Point::from((500.0, 500.0)));
+    press(&mut f, &device, BTN_LEFT);
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+
+    let delta = Point::from((30.0, -15.0));
+    let before1 = f.state().seat.get_pointer().unwrap().current_location();
+    pointer_relative_motion(&mut f, &device, delta);
+    let after1 = f.state().seat.get_pointer().unwrap().current_location();
+    assert!(
+        approx(after1 - before1, delta, 1e-6),
+        "the cursor must track the hand exactly while the camera is locked"
+    );
+
+    let before2 = after1;
+    pointer_relative_motion(&mut f, &device, delta);
+    let after2 = f.state().seat.get_pointer().unwrap().current_location();
+    assert!(
+        approx(after2 - before2, delta, 1e-6),
+        "a second motion must not compound an extra offset carried over from the first"
+    );
+
+    release(&mut f, &device, BTN_LEFT);
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The multi-output regression guard: the fullscreen lock is
+/// `is_output_fullscreen(output)` on the grab's own output, never global. A
+/// second monitor must keep panning normally while the first is fullscreen —
+/// a lock that read the active output (or any output) instead of the grab's
+/// own would freeze every viewport, not just the fullscreen one.
+#[test]
+fn panning_output_b_still_works_while_output_a_is_fullscreen() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let out1 = f.add_output(1, (1920, 1080));
+    let out2 = f.add_output(2, (1280, 720));
+
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    f.state().enter_fullscreen(&window, Some(out1.clone()));
+    let out1_parked = { output_state(&out1).camera };
+
+    // Route the next press to output B, far from anything on the shared canvas.
+    {
+        let mut os = output_state(&out2);
+        os.camera = Point::from((50_000.0, 50_000.0));
+        os.zoom = 1.0;
+    }
+    f.state().focused_output = Some(out2.clone());
+
+    let device = FakeDevice::mouse();
+    pointer_to(&mut f, &device, Point::from((50_100.0, 50_100.0)));
+    press(&mut f, &device, BTN_LEFT);
+    let grab_output = f
+        .state()
+        .seat
+        .get_pointer()
+        .unwrap()
+        .with_grab(|_, g| g.downcast_ref::<PanGrab>().map(|p| p.output.clone()))
+        .flatten();
+    assert_eq!(
+        grab_output,
+        Some(out2.clone()),
+        "precondition: the press pinned the grab to output B"
+    );
+
+    let out2_before = { output_state(&out2).camera };
+    pointer_relative_motion(&mut f, &device, Point::from((60.0, 40.0)));
+
+    assert_ne!(
+        { output_state(&out2).camera },
+        out2_before,
+        "output B's camera must still move — the fullscreen lock is per-output"
+    );
+    assert_eq!(
+        { output_state(&out1).camera },
+        out1_parked,
+        "output A's parked camera must stay put; a global guard would be the real regression"
+    );
+
+    release(&mut f, &device, BTN_LEFT);
+    f.state().exit_fullscreen_on(&out1);
+}
+
+/// Touch reaches the same inertness as the mouse grab: `apply_pan` funnels
+/// through `drift_pan_on` exactly like `PanGrab` does, so a one-finger pan
+/// already running when fullscreen lands goes inert too.
+#[test]
+fn a_touch_pan_in_flight_goes_inert_once_fullscreen_locks_the_camera() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    origin_view(&mut f);
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((3000, 3000)),
+        true,
+    );
+
+    touch_down(&mut f, Point::from((500.0, 500.0)), 0);
+    // Clears the dead zone; the recognizer only baselines here, no pan yet.
+    touch_motion(&mut f, Point::from((500.0, 480.0)), 0);
+    // A real pan, still pre-fullscreen — proves the rig actually drives the camera.
+    touch_motion(&mut f, Point::from((500.0, 440.0)), 0);
+    assert_ne!(
+        f.state().camera(),
+        Point::from((0.0, 0.0)),
+        "precondition: the touch drag is really panning before fullscreen lands"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    let parked_camera = f.state().camera();
+
+    touch_motion(&mut f, Point::from((500.0, 400.0)), 0);
+    touch_motion(&mut f, Point::from((500.0, 350.0)), 0);
+    assert_eq!(
+        f.state().camera(),
+        parked_camera,
+        "touch motion after fullscreen lands must not move the locked camera"
+    );
+    assert_eq!(
+        window_position(&mut f, &window),
+        parked_camera.to_i32_round(),
+        "the window must stay exactly where the park put it"
+    );
+
+    touch_up(&mut f, 0);
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The pinch-zoom counterpart: `apply_zoom` has its own fullscreen guard (it
+/// can't funnel through `drift_pan_on` like a pan does — a pinch also
+/// re-anchors the camera), so a two-finger pinch already spreading when
+/// fullscreen lands must leave both the camera and the zoom exactly where the
+/// park put them.
+#[test]
+fn a_touch_pinch_in_flight_goes_inert_once_fullscreen_locks_the_zoom() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    origin_view(&mut f);
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((3000, 3000)),
+        true,
+    );
+
+    // A pinch-IN (fingers converging): `MAX_ZOOM` is 1.0 (the canvas's "actual
+    // pixels" ceiling), so a spreading pinch from zoom 1.0 clamps away to
+    // nothing — only a contraction can show a real, observable zoom change here.
+    touch_down(&mut f, Point::from((300.0, 500.0)), 0);
+    touch_down(&mut f, Point::from((900.0, 500.0)), 1);
+    // A real pinch, still pre-fullscreen — proves the rig actually drives the
+    // zoom (same step shape as `two_finger_spread_on_canvas_zooms` in the
+    // recognizer's own unit tests, mirrored to contract instead of spread).
+    touch_motion(&mut f, Point::from((360.0, 500.0)), 0);
+    touch_motion(&mut f, Point::from((840.0, 500.0)), 1);
+    touch_motion(&mut f, Point::from((420.0, 500.0)), 0);
+    touch_motion(&mut f, Point::from((780.0, 500.0)), 1);
+    touch_motion(&mut f, Point::from((480.0, 500.0)), 0);
+    touch_motion(&mut f, Point::from((720.0, 500.0)), 1);
+    assert_ne!(
+        f.state().zoom(),
+        1.0,
+        "precondition: the touch pinch is really zooming before fullscreen lands"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    let parked_camera = f.state().camera();
+    let parked_zoom = f.state().zoom();
+
+    touch_motion(&mut f, Point::from((540.0, 500.0)), 0);
+    touch_motion(&mut f, Point::from((660.0, 500.0)), 1);
+    touch_motion(&mut f, Point::from((570.0, 500.0)), 0);
+    touch_motion(&mut f, Point::from((630.0, 500.0)), 1);
+    assert_eq!(
+        f.state().zoom(),
+        parked_zoom,
+        "pinch motion after fullscreen lands must not move the locked zoom"
+    );
+    assert_eq!(
+        f.state().camera(),
+        parked_camera,
+        "nor the locked camera — apply_zoom re-anchors it on every engaged frame"
+    );
+    assert_eq!(
+        window_position(&mut f, &window),
+        parked_camera.to_i32_round(),
+        "the window must stay exactly where the park put it"
+    );
+
+    touch_up(&mut f, 0);
+    touch_up(&mut f, 1);
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// Edge-pan drives the camera directly, not through `camera_target`, so it
+/// needs its own fullscreen check in `effective_edge_pan_velocity` — a
+/// velocity the camera cannot act on must not walk the cursor either.
+#[test]
+fn edge_pan_goes_inert_on_a_fullscreen_output() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+
+    {
+        let mut os = output_state(&output);
+        os.edge_pan_velocity = Some(Point::from((-400.0, 0.0)));
+        os.edge_pan_screen_pos = Some(Point::from((0.0, 500.0)));
+    }
+
+    let camera_before = f.state().camera();
+    let pointer_before = f.state().seat.get_pointer().unwrap().current_location();
+
+    f.state().apply_edge_pan();
+
+    assert_eq!(
+        f.state().camera(),
+        camera_before,
+        "edge-pan must not move a fullscreen output's locked camera"
+    );
+    assert_eq!(
+        f.state().seat.get_pointer().unwrap().current_location(),
+        pointer_before,
+        "with nothing to compensate for, the warp must not run either"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// Arming a zoom/camera flight on a fullscreen output must clear it, not
+/// merely leave it stuck — `set_zoom_target(None)` is only reached once zoom
+/// *arrives*, so an ignored target would spin the lerp for the whole
+/// fullscreen session. Both backends call `disarm_view_flight_on_fullscreen`
+/// to answer it: winit inline, udev once per output per tick.
+#[test]
+fn arming_a_zoom_target_on_a_fullscreen_output_gets_cleared_not_ignored() {
+    let mut f = Fixture::new();
+    f.skip_baseline_check();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+
+    // `zoom_to_anchored` arms targets without consulting fullscreen; only the
+    // eventual camera/zoom write is guarded. Zooming out since `MAX_ZOOM` is 1.0.
+    f.state().zoom_to_anchored(0.5);
+    assert!(
+        f.state().zoom_target().is_some(),
+        "precondition: arming a target is not itself guarded"
+    );
+
+    // Winit's frame loop calls this directly, once per frame.
+    f.state().disarm_view_flight_on_fullscreen(&output);
+    assert!(
+        f.state().zoom_target().is_none(),
+        "the per-tick disarm cleared the target rather than leaving it stuck"
+    );
+    assert!(f.state().camera_target().is_none());
+    assert_eq!(f.state().zoom(), 1.0, "zoom itself never left the park");
+
+    // udev's tick_all_animations calls the same function once per output.
+    f.state().zoom_to_anchored(0.5);
+    f.state().tick_all_animations();
+    assert!(
+        f.state().zoom_target().is_none(),
+        "udev's per-output tick disarms it the same way"
+    );
+    assert_eq!(f.state().zoom(), 1.0);
+
+    f.state().exit_fullscreen_on(&output);
 }

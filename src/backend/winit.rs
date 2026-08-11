@@ -175,6 +175,11 @@ pub fn init_winit(
             // --- Edge auto-pan (window drag near viewport edges) ---
             data.apply_edge_pan();
 
+            // Winit has one output; udev's per-output tick calls this per output instead.
+            if let Some(animated) = data.active_output() {
+                data.disarm_view_flight_on_fullscreen(&animated);
+            }
+
             // --- Zoom animation (before camera so recomputed target is used) ---
             data.apply_zoom_animation(dt);
 

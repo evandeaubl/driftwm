@@ -227,17 +227,21 @@ impl DriftWm {
         match state {
             GestureState::SwipePan => {
                 let s = self.config.trackpad_speed;
-                let canvas_delta: Point<f64, Logical> =
+                let requested: Point<f64, Logical> =
                     (-delta.x * s / zoom, -delta.y * s / zoom).into();
-                if let Some(output) = self.gesture_output.clone() {
-                    self.drift_pan_on(canvas_delta, time, &output);
-                } else {
-                    self.drift_pan(canvas_delta, time);
-                }
+                let canvas_delta = match self.gesture_output_or_active() {
+                    Some(output) => self.drift_pan_on(requested, time, &output),
+                    None => Point::from((0.0, 0.0)),
+                };
 
-                let pointer = self.seat.get_pointer().unwrap();
-                let pos = pointer.current_location();
-                self.warp_pointer(pos + canvas_delta);
+                // Skip the warp at zero: it still flags a pointer resync, which
+                // flushes a same-position motion to the focused client every
+                // gesture frame.
+                if canvas_delta.x != 0.0 || canvas_delta.y != 0.0 {
+                    let pointer = self.seat.get_pointer().unwrap();
+                    let pos = pointer.current_location();
+                    self.warp_pointer(pos + canvas_delta);
+                }
             }
             GestureState::SwipeMove => {
                 let pointer = self.seat.get_pointer().unwrap();

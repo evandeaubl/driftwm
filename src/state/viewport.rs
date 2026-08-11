@@ -25,9 +25,17 @@ impl DriftWm {
 
     /// Move `output`'s camera, honoring the fullscreen lock. Every per-output
     /// animation tick (momentum, edge-pan, zoom, camera) routes through here, so
-    /// none can move a fullscreen output's camera. Interactive pan/zoom grabs
-    /// still write output_state directly, but they exit fullscreen before
-    /// panning, so they never race the lock.
+    /// none can move a fullscreen output's camera.
+    ///
+    /// Interactive pan/zoom writers are split. `drift_pan_on`, the touch grab's
+    /// zoom and the pinch's pinned-output branch write output_state directly and
+    /// each carry their own copy of this check; the pinch's fallback branch, for
+    /// a gesture with no pinned output, comes back through `set_camera` /
+    /// `set_zoom` and is covered here. A gesture that *begins* while the output
+    /// is already fullscreen exits it first, so the common case reaches no guard
+    /// at all — but fullscreen landing mid-gesture inverts that ordering, which
+    /// is what the direct writers' own guards exist for. Do not read this lock as
+    /// covering them.
     ///
     /// Invariant: a fullscreen window is parked at its output's camera-origin at
     /// zoom 1, so the camera must not move or it slides off (0,0) and re-exposes
@@ -45,8 +53,15 @@ impl DriftWm {
             .map(|o| output_state(&o).zoom)
             .unwrap_or(1.0)
     }
+    /// Zoom the active output, honoring the same fullscreen lock as
+    /// [`Self::set_camera_on`]: the parked window fills its output at zoom 1,
+    /// so any other zoom shrinks or crops it while the cull still hides
+    /// everything behind. `enter_fullscreen` and the exit write output_state
+    /// directly to seed and restore the park.
     pub fn set_zoom(&mut self, val: f64) {
-        if let Some(o) = self.active_output() {
+        if let Some(o) = self.active_output()
+            && !self.is_output_fullscreen(&o)
+        {
             output_state(&o).zoom = val;
         }
     }

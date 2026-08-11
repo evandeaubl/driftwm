@@ -29,8 +29,13 @@ pub struct FakeInput;
 
 /// Timestamps in milliseconds. Real backends hand out increasing times and the
 /// middle-click buffer stores a press/release pair, so give every event its own
-/// tick rather than a constant. The counter is process-wide and never reset —
-/// no scenario reads an absolute time, only differences within one sequence.
+/// tick rather than a constant.
+///
+/// The counter is process-wide and never reset, so the gap between two events a
+/// scenario issues back to back is not bounded — other tests running in parallel
+/// advance it in between. Anything reading a *difference* that has a threshold
+/// on it, the velocity tracker's `VELOCITY_WINDOW_MS` above all, must pin its
+/// own timestamps instead (see [`pointer_relative_motion_at`]).
 fn next_time() -> u32 {
     static CLOCK: AtomicU32 = AtomicU32::new(1);
     CLOCK.fetch_add(1, Ordering::Relaxed)
@@ -392,12 +397,27 @@ pub fn pointer_to(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>)
 /// Report relative motion of `delta` — what a mouse hands over between the
 /// last position and this one, unclamped and unmapped to any output.
 pub fn pointer_relative_motion(f: &mut Fixture, device: &FakeDevice, delta: Point<f64, Logical>) {
+    pointer_relative_motion_at(f, device, delta, next_time());
+}
+
+/// [`pointer_relative_motion`] with the timestamp pinned. `next_time` is a
+/// process-global counter, so two "consecutive" motions can land arbitrarily far
+/// apart once other tests run in parallel. Past the velocity tracker's window
+/// that evicts the earlier sample and zeroes the launch velocity, which quietly
+/// satisfies any assertion about momentum not being banked — so a test making
+/// one has to control the spacing itself.
+pub fn pointer_relative_motion_at(
+    f: &mut Fixture,
+    device: &FakeDevice,
+    delta: Point<f64, Logical>,
+    time_ms: u32,
+) {
     f.state()
         .process_input_event::<FakeInput>(InputEvent::PointerMotion {
             event: FakeRelativeEvent {
                 device: device.clone(),
                 delta,
-                time: next_time(),
+                time: time_ms,
             },
         });
 }

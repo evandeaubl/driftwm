@@ -387,6 +387,11 @@ impl TouchGestureGrab {
     /// via `zoom_touch_speed`, clamp it, and re-anchor the camera at the screen
     /// anchor so the point under the fingers stays put.
     fn apply_zoom(&self, data: &mut DriftWm, scale: f64, anchor: Point<f64, Logical>) {
+        // Fullscreen locks the camera and zoom (see `set_camera_on`); a pinch
+        // that started before the fullscreen just goes inert.
+        if data.is_output_fullscreen(&self.output) {
+            return;
+        }
         let zoom = output_state(&self.output).zoom;
         let new_zoom = (zoom * (1.0 + (scale - 1.0) * data.config.zoom_touch_speed))
             .clamp(data.min_zoom(), canvas::MAX_ZOOM);

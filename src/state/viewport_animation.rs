@@ -304,7 +304,11 @@ impl DriftWm {
         self.set_camera(self.camera() + delta);
         self.update_output_from_camera();
 
-        // Shift pointer canvas position so screen position stays fixed
+        // Warps by the requested delta, not the applied one, which is only safe
+        // because `set_camera` cannot refuse here: `enter_fullscreen` stops the
+        // momentum and clears its tracker, and `drift_pan_on` — the sole
+        // `accumulate` caller — refuses to refill it while fullscreen, so a
+        // fullscreen output can never have a coasting momentum to tick.
         let pos = self.seat.get_pointer().unwrap().current_location();
         self.warp_pointer(pos + delta);
     }
@@ -373,30 +377,36 @@ impl DriftWm {
     /// Call this from any input path that should drift (scroll, click-drag, future gestures).
     /// Targets the active output (where the pointer is).
     /// `time_ms` is the libinput event timestamp (see [`canvas::VelocityTracker`]).
-    pub fn drift_pan(&mut self, delta: Point<f64, Logical>, time_ms: u32) {
-        self.with_output_state(|os| {
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
-            os.overview_return = None;
-            os.momentum.accumulate(delta, time_ms);
-            os.camera.x += delta.x;
-            os.camera.y += delta.y;
-        });
-        self.update_output_from_camera();
-        if let Some(output) = self.active_output() {
-            self.schedule_momentum_timer(&output);
+    ///
+    /// Returns the delta the camera actually took, as [`Self::drift_pan_on`] does
+    /// — zero when there is no output to pan.
+    pub fn drift_pan(&mut self, delta: Point<f64, Logical>, time_ms: u32) -> Point<f64, Logical> {
+        match self.active_output() {
+            Some(output) => self.drift_pan_on(delta, time_ms, &output),
+            None => Point::from((0.0, 0.0)),
         }
     }
 
     /// Apply a viewport pan delta on a specific output (for grabs pinned to an output).
     /// `time_ms` is the libinput event timestamp (see [`canvas::VelocityTracker`]).
+    ///
+    /// Returns the delta the camera actually took — zero on a fullscreen
+    /// output, which refuses the pan. Callers that warp the pointer to hold
+    /// the cursor against the camera must compensate by the returned delta,
+    /// not the requested one, or the cursor drifts off the parked window.
     pub fn drift_pan_on(
         &mut self,
         delta: Point<f64, Logical>,
         time_ms: u32,
         output: &smithay::output::Output,
-    ) {
+    ) -> Point<f64, Logical> {
+        // Bypasses `set_camera_on`'s guard (this writes output_state directly),
+        // so it needs its own: a pan in flight when fullscreen lands goes inert
+        // rather than race that lock. `enter_fullscreen` already cleared the
+        // velocity tracker, so release banks no fling either.
+        if self.is_output_fullscreen(output) {
+            return Point::from((0.0, 0.0));
+        }
         {
             let mut os = super::output_state(output);
             os.camera_target = None;
@@ -409,6 +419,7 @@ impl DriftWm {
         }
         self.update_output_from_camera();
         self.schedule_momentum_timer(output);
+        delta
     }
 
     /// Push the momentum auto-launch out to [`MOMENTUM_LAUNCH_DELAY`] from now,
@@ -606,6 +617,25 @@ impl DriftWm {
         }
     }
 
+    /// Drop `output`'s pending camera/zoom flight while it is fullscreen. The
+    /// camera write is already guarded by `set_camera_on`, but a zoom target
+    /// left armed is never reached by the arrival check that would clear it,
+    /// so on winit the lerp would run for the whole fullscreen session.
+    ///
+    /// Call position is load-bearing, not stylistic: it must precede the zoom
+    /// tick. udev's `tick_zoom_animation_on` writes `os.zoom` directly rather
+    /// than through the guarded setter, so a disarm sequenced after it would let
+    /// the zoom leave the park and draw the parked window scaled.
+    pub(crate) fn disarm_view_flight_on_fullscreen(&mut self, output: &Output) {
+        if !self.is_output_fullscreen(output) {
+            return;
+        }
+        let mut os = output_state(output);
+        os.camera_target = None;
+        os.zoom_target = None;
+        os.zoom_animation_anchor = None;
+    }
+
     // -- Multi-output animation ticking (udev backend) --
     // The existing apply_* methods above operate on active_output() and are used
     // by the winit backend (single output, timer-based). Winit gets away with
@@ -640,15 +670,7 @@ impl DriftWm {
 
             self.tick_scroll_momentum_on(output, is_active, dt);
             self.tick_edge_pan_on(output, is_active);
-            // A fullscreen output's camera is locked (set_camera_on refuses to
-            // move it). Drop any pending pan/zoom target so it can't fire the
-            // moment fullscreen exits; the ticks then no-op on the None targets.
-            if self.is_output_fullscreen(output) {
-                let mut os = output_state(output);
-                os.camera_target = None;
-                os.zoom_target = None;
-                os.zoom_animation_anchor = None;
-            }
+            self.disarm_view_flight_on_fullscreen(output);
             self.tick_zoom_animation_on(output, is_active, dt);
             self.tick_camera_animation_on(output, is_active, dt);
         }
@@ -674,6 +696,9 @@ impl DriftWm {
         let cam = output_state(output).camera;
         self.set_camera_on(output, Point::from((cam.x + delta.x, cam.y + delta.y)));
 
+        // Requested delta rather than applied, safe for the same reason as
+        // `apply_scroll_momentum`: a fullscreen output's momentum is stopped at
+        // entry and cannot be re-accumulated, so `tick` never yields one here.
         if is_active {
             let pos = self.seat.get_pointer().unwrap().current_location();
             self.warp_pointer(pos + delta);
