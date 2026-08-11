@@ -36,6 +36,13 @@ Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 refuses to reposition them and `resize` refuses to resize them. Reading either
 still works.
 
+`camera` and `zoom` take the opposite policy. A fullscreen window parks the
+viewport, so **setting** either one exits fullscreen first and then applies,
+rather than refusing. The practical consequence: a script that polls `camera` and
+writes the value back — a follow-the-focus panner, say — will drop a user out of
+a fullscreen video the first time it writes. Reading is always safe; `camera` and
+`zoom` with no argument never disturb fullscreen.
+
 ### Sizes and the visual frame
 
 Every size and position here describes the window's **visual frame**: the

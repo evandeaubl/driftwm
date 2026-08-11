@@ -133,13 +133,19 @@ pub enum Msg {
     ///
     /// Panning is animated, and takes both coordinates or neither.
     ///
+    /// A fullscreen window parks the viewport, so setting a position exits
+    /// fullscreen first rather than refusing as `move` does — a script that
+    /// writes the camera in a loop will drop the user out of a fullscreen video.
+    /// Reading never disturbs it.
+    ///
     /// `--json` reply: `{"Ok":{"Camera":{"x":500.0,"y":300.0}}}`.
     #[command(allow_negative_numbers = true)]
     Camera { x: Option<f64>, y: Option<f64> },
     /// Get the zoom level, or set it with `<level>`.
     ///
     /// Setting is animated and clamped: out to fit-all, in to native resolution
-    /// (no magnification).
+    /// (no magnification). As with `camera`, setting a level on a fullscreen
+    /// output exits fullscreen first rather than refusing; reading is safe.
     ///
     /// `--json` reply: `{"Ok":{"Zoom":0.5}}`.
     Zoom { level: Option<f64> },

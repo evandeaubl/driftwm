@@ -21,6 +21,7 @@ mod auto_navigate_click;
 mod auto_placement;
 mod bookmarks;
 mod camera_animation;
+mod camera_zoom_ipc;
 mod cli_docs;
 mod client_teardown;
 mod config_reload;

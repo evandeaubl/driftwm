@@ -242,6 +242,19 @@ fn cmd_camera(arg: Option<(f64, f64)>, state: &mut DriftWm) -> Reply {
             Ok(Response::Camera { x, y })
         }
         Some((x, y)) => {
+            // Before the exit, so a malformed request can't tear down fullscreen
+            // on its way to being rejected. serde_json parses `1e999` as `inf`
+            // without error, and an infinite target never satisfies the camera
+            // animation's arrival test — the viewport would never settle again.
+            if !x.is_finite() || !y.is_finite() {
+                return Err("camera coordinates must be finite numbers".to_string());
+            }
+            // Exit before deriving the target below: a fullscreen output
+            // refuses camera moves, and the target is derived from `state.zoom()`,
+            // which the park pins at 1.0 until the exit restores it.
+            if state.is_fullscreen() {
+                state.exit_fullscreen();
+            }
             // (x, y) is the viewport center, Y-up; map it to the internal camera
             // target so the viewport ends up centered there.
             let target =
@@ -258,6 +271,11 @@ fn cmd_zoom(arg: Option<f64>, state: &mut DriftWm) -> Reply {
         Some(zoom) => {
             if !zoom.is_finite() || zoom <= 0.0 {
                 return Err("zoom must be a positive number".to_string());
+            }
+            // As in `cmd_camera`: exit first, since `zoom_to_anchored` below
+            // anchors on the current camera and zoom, which the exit restores.
+            if state.is_fullscreen() {
+                state.exit_fullscreen();
             }
             // Same bounds as keyboard/gesture zoom; reply reports what was applied.
             let clamped = zoom.clamp(state.min_zoom(), driftwm::canvas::MAX_ZOOM);

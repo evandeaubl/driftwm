@@ -238,6 +238,8 @@ Get the camera position, or pan the viewport to `<x> <y>` (canvas point, Y-up).
 
 Panning is animated, and takes both coordinates or neither.
 
+A fullscreen window parks the viewport, so setting a position exits fullscreen first rather than refusing as `move` does — a script that writes the camera in a loop will drop the user out of a fullscreen video. Reading never disturbs it.
+
 `--json` reply: `{"Ok":{"Camera":{"x":500.0,"y":300.0}}}`.
 
 ```bash
@@ -253,7 +255,7 @@ driftwm msg zoom [LEVEL]
 
 Get the zoom level, or set it with `<level>`.
 
-Setting is animated and clamped: out to fit-all, in to native resolution (no magnification).
+Setting is animated and clamped: out to fit-all, in to native resolution (no magnification). As with `camera`, setting a level on a fullscreen output exits fullscreen first rather than refusing; reading is safe.
 
 `--json` reply: `{"Ok":{"Zoom":0.5}}`.
 
