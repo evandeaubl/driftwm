@@ -34,6 +34,17 @@ pub struct FullscreenEntry<W> {
     pub window: W,
     pub saved_location: Point<i32, Logical>,
     pub saved_size: Size<i32, Logical>,
+    /// How far the window sits from the origin its fullscreen parked the
+    /// viewport at, so a client that commits smaller than the output is centred
+    /// in it rather than pinned to its top-left corner. Zero until such a commit
+    /// arrives, and zero for good for the clients that take the size they were
+    /// offered.
+    ///
+    /// Held here rather than recomputed from live geometry because the position
+    /// and this are one fact written twice: anything that derived it separately
+    /// could read a size the position had not been moved for yet, and the
+    /// parked-camera predicate subtracts it back out to recover the park.
+    pub centre_offset: Point<i32, Logical>,
 }
 
 /// Screen-space pin site for a window pinned to one output (the
@@ -432,8 +443,18 @@ impl<W: StageElement> Stage<W> {
                 window: window.into(),
                 saved_location,
                 saved_size,
+                centre_offset: Point::default(),
             },
         );
+    }
+
+    /// Record where the fullscreen window on `output` was moved to relative to
+    /// its park. Paired with the [`Self::set_position`] that moved it — the two
+    /// are one write and drift apart if separated.
+    pub fn set_fullscreen_centre_offset(&mut self, output: &str, offset: Point<i32, Logical>) {
+        if let Some(entry) = self.fullscreen.get_mut(output) {
+            entry.centre_offset = offset;
+        }
     }
 
     pub fn take_fullscreen(&mut self, output: &str) -> Option<FullscreenEntry<W>> {

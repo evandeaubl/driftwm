@@ -889,6 +889,8 @@ impl CompositorHandler for DriftWm {
                     }
                 }
 
+                self.recentre_fullscreen_window(&window);
+
                 self.settle_adopted_stable_rect(&window, &root);
 
                 self.reflow_grown_snapped_window(&window, &root);

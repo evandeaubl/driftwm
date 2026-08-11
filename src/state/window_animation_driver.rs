@@ -512,15 +512,21 @@ impl DriftWm {
         let Some(entry) = self.stage.fullscreen_on(&output.name()) else {
             return false;
         };
-        self.fullscreen_entry_on(output).is_none() && self.camera_parked_on(output, &entry.window)
+        self.fullscreen_entry_on(output).is_none()
+            && self.camera_parked_on(output, &entry.window, entry.centre_offset)
     }
 
     /// Whether `output`'s viewport still sits where `window`'s fullscreen entry
-    /// parked it. The window is mapped *at* that camera origin at zoom 1, so a
-    /// drifted viewport no longer covers it — claiming coverage there would
-    /// cull the canvas from under it and show the clear color. Settled
-    /// counterpart of the frozen picture's camera-scoped claim in
-    /// [`FullscreenCover::view`].
+    /// parked it. The window is mapped at that camera origin at zoom 1 — plus
+    /// `centre_offset`, which is how far a client that committed smaller than
+    /// the output was moved to sit centred in it — so a drifted viewport no
+    /// longer covers it, and claiming coverage there would cull the canvas from
+    /// under it and show the clear color. Settled counterpart of the frozen
+    /// picture's camera-scoped claim in [`FullscreenCover::view`].
+    ///
+    /// The offset is passed in rather than looked up: the caller has already
+    /// resolved the entry, and a second `Option` here would be a second early
+    /// return whose direction has to be argued all over again.
     ///
     /// Compared exactly, not with an epsilon: the park writes integers and
     /// exactly 1.0, so any difference is a real seam, not rounding noise.
@@ -537,10 +543,16 @@ impl DriftWm {
     /// are torn down by different sweeps (`Stage::retain_alive` drops the entry,
     /// `reap_dead_fullscreen` the map), so a dead fullscreen window can be
     /// missing from one while the other still names it.
-    fn camera_parked_on(&self, output: &Output, window: &StageWindow) -> bool {
-        let Some(parked) = self.stage.position_of(window) else {
+    fn camera_parked_on(
+        &self,
+        output: &Output,
+        window: &StageWindow,
+        centre_offset: Point<i32, Logical>,
+    ) -> bool {
+        let Some(position) = self.stage.position_of(window) else {
             return false;
         };
+        let parked = position - centre_offset;
         let os = output_state(output);
         os.zoom == 1.0 && os.camera == parked.to_f64()
     }
@@ -1247,11 +1259,19 @@ impl DriftWm {
         let chrome = chrome.as_ref();
         let snapshot = if let Some(output) = fullscreen_output {
             let flatten_scale = output.current_scale().fractional_scale();
+            // The park puts the window at the output's top-left, except when it
+            // under-filled the output and was centred in it — then the picture
+            // has to fade from where it was actually drawn.
+            let centred = self
+                .stage
+                .fullscreen_on(&output.name())
+                .map(|fs| fs.centre_offset)
+                .unwrap_or_default();
             crate::render::snapshot_screen(
                 backend.renderer(),
                 &px,
                 output.name(),
-                Point::from((-geom_loc.x, -geom_loc.y)),
+                Point::from((centred.x - geom_loc.x, centred.y - geom_loc.y)),
                 flatten_scale,
                 scale_amplitude,
                 alpha_only,

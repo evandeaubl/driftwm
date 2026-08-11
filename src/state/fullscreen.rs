@@ -6,7 +6,7 @@ use smithay::{
 };
 
 use super::window_animation::{AnimSpace, ContentPolicy, GeometryRole};
-use super::{DriftWm, FocusTarget};
+use super::{DriftWm, FocusTarget, StageWindow};
 use driftwm::window_ext::WindowExt;
 
 impl DriftWm {
@@ -573,6 +573,64 @@ impl DriftWm {
             return;
         };
         fs.window.enter_fullscreen_configure(new_size);
+    }
+
+    /// Sit a fullscreen window that committed smaller than its output in the
+    /// middle of it, instead of in its top-left corner where the park put it.
+    ///
+    /// The compositor offers the client the whole output; a client that takes
+    /// less — a fixed-size dialog, a game holding an aspect ratio — leaves the
+    /// rest to the backdrop, and unshifted that remainder is an L down the right
+    /// edge and along the bottom rather than even bars.
+    ///
+    /// Moves the *mapped* position, not a render offset: every hit test,
+    /// pointer-constraint origin and cursor hint in the tree derives from
+    /// `stage.position_of`, so moving where the window is drawn without moving
+    /// where it is would leave a fullscreen game's clicks landing an offset away
+    /// from its picture. `set_position` rather than `map_window` — the window is
+    /// already topmost and a re-map is a restack.
+    ///
+    /// Only on a commit, and only once the client has answered the fullscreen
+    /// configure: until then its geometry is still the windowed one, and
+    /// centring *that* would fling a small window to the middle of the output
+    /// and slide it back a frame later, on every fullscreen entry.
+    pub fn recentre_fullscreen_window(&mut self, window: &Window) {
+        let Some(surface) = window.wl_surface() else {
+            return;
+        };
+        let Some(output) = self.find_fullscreen_output_for_surface(&surface) else {
+            return;
+        };
+        let element = StageWindow::Client(window.clone());
+        let owed = self
+            .stage
+            .id_of(&element)
+            .is_some_and(|id| self.window_animations.awaits_requested_size(id));
+        if owed || super::owes_a_configured_size(window) {
+            return;
+        }
+        let Some(entry) = self.stage.fullscreen_on(&output.name()) else {
+            return;
+        };
+        let stored = entry.centre_offset;
+        let viewport = super::output_logical_size(&output);
+        let size = window.geometry().size;
+        let offset = Point::from((
+            ((viewport.w - size.w) / 2).max(0),
+            ((viewport.h - size.h) / 2).max(0),
+        ));
+        if offset == stored {
+            return;
+        }
+        let Some(position) = self.stage.position_of(&element) else {
+            return;
+        };
+        // Back out the offset the position already carries to recover the park,
+        // the same way the parked-camera predicate does.
+        self.stage
+            .set_position(&element, position - stored + offset);
+        self.stage
+            .set_fullscreen_centre_offset(&output.name(), offset);
     }
 
     /// Find which output holds a fullscreen window by its surface.
