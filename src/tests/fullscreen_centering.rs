@@ -21,6 +21,7 @@ use smithay::output::Output;
 use smithay::utils::Point;
 
 use super::client::ClientId;
+use super::input_backend::{FakeDevice, pointer_to};
 use super::{Fixture, adopt_last_configure, map_window, tick_until_settled, window_by_app_id};
 
 const TICK: Duration = Duration::from_millis(16);
@@ -228,10 +229,11 @@ fn a_fixed_size_client_that_re_commits_its_own_size_is_still_centred() {
         "and the move is recorded, without which the cull gate loses the output"
     );
 
-    // Its entry chase never saw an answer, so it holds on a real-time deadline
-    // `tick_until_settled` cannot reach. Start the clock past that deadline and
-    // run the leg out from there.
-    let base = Instant::now() + Duration::from_millis(600);
+    // Its entry chase never saw an answer, so it sits on the start hold and then
+    // the endpoint hold, both of which release on wall-clock deadlines rather
+    // than on ticks. `tick_until_settled` cannot outrun them; injecting a `now`
+    // that walks past both can.
+    let base = Instant::now();
     for step in 0..200 {
         f.state()
             .tick_window_animations_at(TICK, base + TICK * step);
@@ -239,6 +241,63 @@ fn a_fixed_size_client_that_re_commits_its_own_size_is_still_centred() {
     assert!(
         f.state().is_output_visually_fullscreen(&output),
         "the cull gate reads a centred fixed-size client as covering its output"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// Centring moves the window out from under a frozen cursor, and re-picking
+/// pointer focus there lands on a different surface — the `leave` that carries
+/// tears down the lock. So the re-seat is skipped while a lock holds.
+///
+/// The cursor has to start where the centred rect will *not* reach it, which the
+/// test asserts rather than assumes: a cursor still inside the moved rect is
+/// already spared by `refresh_pointer_focus`'s own unchanged-focus guard, and
+/// would pass whether or not the skip existed.
+#[test]
+fn centring_a_locked_game_leaves_its_lock_alone() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+
+    let position = f.state().stage.position_of(&window).unwrap().to_f64();
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        position + Point::from((20.0, 20.0)),
+    );
+    f.roundtrip(id);
+    let _lock = f.client(id).lock_pointer(&surface);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().pointer_constraint_active(),
+        "precondition: the lock must arm, or this scenario tests nothing"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    f.client(id).state.pointer_positions.clear();
+
+    ack_fullscreen_at(&mut f, id, &surface, (400, 300));
+
+    let camera = f.state().camera();
+    let cursor = f.state().seat.get_pointer().unwrap().current_location();
+    let centred = f.state().stage.position_of(&window).unwrap().to_f64();
+    assert!(
+        cursor.x < centred.x || cursor.y < centred.y,
+        "precondition: the frozen cursor must fall outside the centred rect \
+         (cursor {cursor:?}, rect origin {centred:?}, camera {camera:?})"
+    );
+    assert!(
+        f.state().pointer_constraint_locked(),
+        "the centring must not re-seat focus out from under a live lock"
+    );
+    assert_eq!(
+        f.client(id).state.pointer_positions,
+        Vec::new(),
+        "and must not hand the locked client an absolute jump"
     );
 
     f.state().exit_fullscreen_on(&output);

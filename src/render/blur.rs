@@ -1366,8 +1366,9 @@ pub(crate) fn process_blur_requests(
             .collect();
 
         // Nothing survives beneath this window to sample. The live case is the
-        // fullscreen window itself: the cull leaves it bottom-most on the
-        // output, so the capture would be the probe's own opaque-black clear,
+        // fullscreen window itself (an output whose wallpaper has not been
+        // cached yet is the degenerate one): the cull leaves it bottom-most on
+        // the output, so the capture would be the probe's own opaque-black clear,
         // blurred into a frosted black slab and masked to the window's alpha —
         // the scene behind it read as solid black. Zero instead, so the window
         // falls through to whatever is really behind, and settle rather than

@@ -1820,10 +1820,12 @@ fn fullscreen_backdrop_element(
                 return false;
             }
             // The window push site multiplies this by an animation's
-            // `visual_alpha`, deliberately not read here: the frozen picture an
-            // exit holds does reach this loop mid-animation, but a freeze holds
-            // alpha at 1 by construction, and the growing entry that would not
-            // is what makes the output read as not visually fullscreen anyway.
+            // `visual_alpha`, deliberately not read here. A frozen picture does
+            // reach this loop mid-animation, but only an opaque one:
+            // `fullscreen_on` is filtered to entries with no open fade, so a
+            // fading picture never claims to cover its output in the first
+            // place. The growing entry that would also be translucent is what
+            // makes the output read as not visually fullscreen at all.
             window
                 .wl_surface()
                 .and_then(|s| driftwm::config::applied_rule(&s))

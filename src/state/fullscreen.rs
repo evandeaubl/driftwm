@@ -642,6 +642,9 @@ impl DriftWm {
         // different surface, which `refresh_pointer_focus`'s own lock guard does
         // not cover (it only spares an *unchanged* focus). The leave it sends
         // tears down the lock, on exactly the fullscreen games this is for.
+        // Confines are deliberately not covered, for the reason that guard gives:
+        // a confined cursor really moves, and suppressing the re-seat would leave
+        // it measured against a stale surface origin.
         if !self.pointer_constraint_locked() {
             self.refresh_pointer_focus();
         }
