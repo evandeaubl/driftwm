@@ -227,6 +227,12 @@ pub struct BlurCache {
     /// been captured at all. Animated refreshes reuse it instead of
     /// re-rendering the surface per window per tick.
     pub mask_stamp: Option<MaskStamp>,
+    /// Whether `texture` is known to hold nothing — freshly allocated, or
+    /// zeroed because there was no backdrop left to frost. The element is left
+    /// out of the frame entirely while this holds: it would draw nothing, and a
+    /// fully transparent element still counts against the one the primary plane
+    /// needs to see to scan a fullscreen window out directly.
+    pub zeroed: bool,
     pub dirty: bool,
     pub last_geometry_generation: u64,
     /// View the blur was last computed at.
@@ -269,6 +275,7 @@ impl BlurCache {
             pads_idle_frames: 0,
             alloc,
             mask_stamp: None,
+            zeroed: true,
             dirty: true,
             last_geometry_generation: 0,
             last_view: ViewStamp::never_captured(),
@@ -337,6 +344,7 @@ impl BlurCache {
             self.mask = t3;
             self.alloc = alloc;
             self.mask_stamp = None;
+            self.zeroed = true;
             self.dirty = true;
             // Stored damage rects are at the old size — drop them; next render reseeds.
             self.damage_bag.reset();
@@ -1378,11 +1386,10 @@ pub(crate) fn process_blur_requests(
         // capture that will not happen.
         if relocated.is_empty() {
             zero_texture(renderer, &cache.texture, cache.alloc);
-            // The splice below draws this texture rebuilt or not, off
-            // `damage_bag`'s snapshot, so without this the tracker would keep
-            // compositing the frost the texture held before it was zeroed.
-            let buf = win_size.to_logical(1).to_buffer(1, Transform::Normal);
-            cache.damage_bag.add([Rectangle::from_size(buf)]);
+            // The splice below drops the element while this holds, and an
+            // element leaving the frame is what damages what it vacated — so
+            // the frost the texture used to hold does not survive on screen.
+            cache.zeroed = true;
             cache.dirty = false;
             continue;
         }
@@ -1693,6 +1700,7 @@ pub(crate) fn process_blur_requests(
         // away anyway.
         let buf = win_size.to_logical(1).to_buffer(1, Transform::Normal);
         cache.damage_bag.add([Rectangle::from_size(buf)]);
+        cache.zeroed = false;
         cache.dirty = false;
     }
 
@@ -1707,6 +1715,9 @@ pub(crate) fn process_blur_requests(
         let Some(cache) = state.render.blur_cache.get(&key) else {
             continue;
         };
+        if cache.zeroed {
+            continue;
+        }
 
         let prefix = match req.layer {
             BlurLayer::Overlay => overlay_prefix,
