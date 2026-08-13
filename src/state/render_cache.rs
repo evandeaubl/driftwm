@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::backend::renderer::element::solid::SolidColorBuffer;
 use smithay::backend::renderer::gles::element::PixelShaderElement;
 use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram};
 use smithay::reexports::wayland_server::backend::ObjectId;
@@ -79,12 +78,6 @@ pub struct RenderCache {
         HashMap<String, HashMap<crate::render::OutlineBufferKey, MemoryRenderBuffer>>,
     /// Pass-through fragment shader cloned into each `BgChunkCache`.
     pub chunk_bg_shader: Option<GlesTexProgram>,
-    /// The opaque plane drawn under a fullscreen window that doesn't cover its
-    /// output. Kept per output rather than built per frame because the buffer
-    /// mints the element `Id` and only bumps its commit counter on a real size
-    /// or colour change — a fresh one each frame would re-damage the whole
-    /// output every frame.
-    pub fullscreen_backdrop: HashMap<String, SolidColorBuffer>,
     pub cached_tile_chunks: HashMap<String, crate::render::BgChunkCache>,
     /// Per-output chunked shader-bake caches (`cache_shader`).
     pub cached_shader_chunks: HashMap<String, crate::render::ShaderChunkCache>,
@@ -120,7 +113,6 @@ impl RenderCache {
             cached_error_bar: HashMap::new(),
             cached_outlines: HashMap::new(),
             chunk_bg_shader: None,
-            fullscreen_backdrop: HashMap::new(),
             cached_tile_chunks: HashMap::new(),
             cached_shader_chunks: HashMap::new(),
         }
@@ -184,7 +176,6 @@ impl RenderCache {
         self.background_last_animate.remove(output_name);
         self.cached_error_bar.remove(output_name);
         self.cached_outlines.remove(output_name);
-        self.fullscreen_backdrop.remove(output_name);
         self.remove_background_chunks(output_name);
         self.remove_capture_state(output_name);
     }

@@ -120,12 +120,10 @@ use smithay::backend::renderer::{
     element::{
         AsRenderElements, Kind,
         memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement},
-        solid::{SolidColorBuffer, SolidColorRenderElement},
         surface::WaylandSurfaceRenderElement,
     },
     gles::{GlesRenderer, GlesTexProgram},
 };
-use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
@@ -1767,86 +1765,7 @@ pub fn compose_frame(
         all_elements.splice(cursor_count..cursor_count, error_bar);
     }
 
-    // Bottom-most, and appended after the blur pass on purpose: inside the slice
-    // `process_blur_requests` samples, the fullscreen window would frost its own
-    // backdrop instead of finding nothing behind it.
-    if output_fullscreen
-        && let Some(backdrop) =
-            fullscreen_backdrop_element(state, &name, &fullscreen_windows, viewport_size, scale)
-    {
-        all_elements.push(backdrop);
-    }
-
     all_elements
-}
-
-/// Not a config option: this is the colour that was already on the output,
-/// written down.
-const BACKDROP_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
-
-/// The plane that stands in for the canvas the fullscreen cull removed, for the
-/// part of the output the fullscreen window does not itself paint over.
-///
-/// Both backends clear to opaque black, so drawing it changes no pixel on
-/// screen — what it changes is everything that reads the frame rather than the
-/// framebuffer. A capture into an alpha-carrying format clears to *transparent*
-/// (`capture::clear_color_for`), so without this a screencast of a fullscreen
-/// output hands out holes wherever the window's own alpha lets the clear
-/// through.
-///
-/// Skipped whenever the window already covers the output opaquely, and not as an
-/// optimization: an element the window does not fully occlude survives smithay's
-/// occlusion pass, which leaves the primary plane holding two elements instead
-/// of one and costs the frame its direct scan-out. Clients that under-fill or
-/// carry a rule opacity are exactly the ones with something to reveal, and
-/// exactly the ones that had no scan-out to lose.
-fn fullscreen_backdrop_element(
-    state: &mut crate::state::DriftWm,
-    name: &str,
-    fullscreen_windows: &[Window],
-    viewport_size: Size<i32, Logical>,
-    scale: Scale<f64>,
-) -> Option<OutputRenderElements> {
-    // Size alone would read a centred window that later grew past a mode change
-    // as covering, and leave the strip it sits offset from unpainted.
-    let centred = state
-        .stage
-        .fullscreen_on(name)
-        .is_some_and(|entry| entry.centre_offset != Point::default());
-    let covered = !centred
-        && fullscreen_windows.iter().any(|window| {
-            let size = window.geometry().size;
-            if size.w < viewport_size.w || size.h < viewport_size.h {
-                return false;
-            }
-            // The window push site multiplies this by an animation's
-            // `visual_alpha`, deliberately not read here. A frozen picture does
-            // reach this loop mid-animation, but only an opaque one:
-            // `fullscreen_on` is filtered to entries with no open fade, so a
-            // fading picture never claims to cover its output in the first
-            // place. The growing entry that would also be translucent is what
-            // makes the output read as not visually fullscreen at all.
-            window
-                .wl_surface()
-                .and_then(|s| driftwm::config::applied_rule(&s))
-                .and_then(|r| r.opacity)
-                .is_none_or(|o| o >= 1.0)
-        });
-    if covered {
-        return None;
-    }
-
-    let buffer = state
-        .render
-        .fullscreen_backdrop
-        .entry(name.to_owned())
-        .or_insert_with(|| SolidColorBuffer::new(viewport_size, BACKDROP_COLOR));
-    // Picks up an output mode change; a no-op otherwise, which is the point —
-    // see `RenderCache::fullscreen_backdrop`.
-    buffer.update(viewport_size, BACKDROP_COLOR);
-    Some(OutputRenderElements::Backdrop(
-        SolidColorRenderElement::from_buffer(buffer, (0, 0), scale, 1.0, Kind::Unspecified),
-    ))
 }
 
 /// Identifies an outline strip buffer by everything that decides its *content*:
