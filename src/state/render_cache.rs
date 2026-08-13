@@ -135,10 +135,10 @@ impl RenderCache {
     /// Destroy the per-output chunk caches (shader-bake + gigapixel TIFF). For
     /// identity changes only — output disconnect/remap, scale or transform
     /// changes, config reload — where the cache's own geometry is what went
-    /// stale. `compose_frame` rebuilds it synchronously on the first
-    /// non-fullscreen frame, which for a gigapixel TIFF is a whole-LOD decode
-    /// and six thread spawns; use [`Self::shrink_background_for_fullscreen`]
-    /// for the transient case.
+    /// stale. `compose_frame` rebuilds it synchronously on the first frame that
+    /// draws the canvas, which for a gigapixel TIFF is a whole-LOD decode and
+    /// six thread spawns; use [`Self::shrink_background_for_fullscreen`] for
+    /// the transient case.
     pub fn remove_background_chunks(&mut self, output_name: &str) {
         self.cached_tile_chunks.remove(output_name);
         self.cached_shader_chunks.remove(output_name);

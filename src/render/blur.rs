@@ -1373,15 +1373,18 @@ pub(crate) fn process_blur_requests(
             })
             .collect();
 
-        // Nothing survives beneath this window to sample. The live case is the
-        // fullscreen window itself (an output whose wallpaper has not been
-        // cached yet is the degenerate one): the cull leaves it bottom-most on
-        // the output, so the capture would be the probe's own opaque-black clear,
-        // blurred into a frosted black slab and masked to the window's alpha —
-        // the scene behind it read as solid black. Zero instead, so the window
-        // falls through to whatever is really behind, and settle rather than
-        // retry: a slice that later has content hashes differently, and leaving
-        // fullscreen moves the camera, so either one dirties the cache again.
+        // Nothing survives beneath this window to sample. The live case is a
+        // fullscreen window that conceals the canvas (an output whose wallpaper
+        // has not been cached yet is the degenerate one): the cull leaves it
+        // bottom-most on the output, so the capture would be the probe's own
+        // opaque-black clear, blurred into a frosted black slab and masked to
+        // the window's alpha — the scene behind it read as solid black. A
+        // translucent fullscreen window conceals nothing, so the canvas stays
+        // drawn beneath it and it finds real content here. Zero instead, so the
+        // window falls through to whatever is really behind, and settle rather
+        // than retry: a slice that later has content hashes differently, and
+        // leaving fullscreen moves the camera, so either one dirties the cache
+        // again.
         // Before `ensure_pads`, so the padded pair is not allocated for a
         // capture that will not happen.
         if relocated.is_empty() {

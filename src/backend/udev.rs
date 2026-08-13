@@ -192,9 +192,10 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         {
             let interval = Duration::from_secs_f64(1.0 / fps as f64);
             // Wake for the soonest-due eligible output; stamps are per-output.
-            // A fullscreen/DPMS-off output's stamp goes stale forever once it
-            // stops rendering — excluding it here keeps a long-dead stamp
-            // from collapsing this to the 1ms floor and busy-rescheduling.
+            // The stamp of an output that stopped rendering its background —
+            // DPMS-off, or fullscreen with the canvas concealed — goes stale
+            // forever; excluding it here keeps a long-dead stamp from
+            // collapsing this to the 1ms floor and busy-rescheduling.
             let elapsed = data
                 .render
                 .background_last_animate
@@ -353,8 +354,10 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
     {
         data.mark_all_dirty();
     } else if data.render.background_is_animated {
-        // Fullscreen outputs skip the background entirely, so an animated bg
-        // gives them nothing to redraw — marking them just burns battery.
+        // An output whose fullscreen window conceals the canvas skips the
+        // background entirely, so an animated bg gives it nothing to redraw —
+        // marking it just burns battery. A translucent fullscreen window
+        // conceals nothing, so its output keeps ticking.
         let dirty: Vec<_> = data
             .background_render_eligible_outputs()
             .filter(|o| data.background_animation_due(&o.name()))

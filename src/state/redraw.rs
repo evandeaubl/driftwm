@@ -181,10 +181,10 @@ impl DriftWm {
 
     /// True when any eligible output's animated background is due (idle
     /// wake-up check). Restricted to outputs that actually render the
-    /// background — a DPMS-off or fullscreen output stops stamping
-    /// `background_last_animate`, so including it here would read as
-    /// permanently due and defeat the idle fast path (see
-    /// `background_render_eligible_outputs`).
+    /// background — an output that is DPMS-off, or whose fullscreen window
+    /// conceals the canvas, stops stamping `background_last_animate`, so
+    /// including it here would read as permanently due and defeat the idle fast
+    /// path (see `background_render_eligible_outputs`).
     pub fn background_animation_due_any(&self) -> bool {
         self.background_render_eligible_outputs()
             .any(|o| self.background_animation_due(&o.name()))
