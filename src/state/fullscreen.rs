@@ -577,7 +577,7 @@ impl DriftWm {
 
     /// Sit a fullscreen window that committed smaller than its output in the
     /// middle of it, instead of in the top-left corner the park mapped it at:
-    /// unshifted, the remainder the backdrop shows is an L down the right edge
+    /// unshifted, the remainder it leaves uncovered is an L down the right edge
     /// and along the bottom rather than even bars.
     ///
     /// Moves the *mapped* position, not a render offset: every hit test,
@@ -627,27 +627,45 @@ impl DriftWm {
         };
         // Back out the offset the position already carries to recover the park,
         // the same way the parked-camera predicate does.
-        self.stage
-            .set_position(&element, position - stored + offset);
+        let centred = position - stored + offset;
+        self.stage.set_position(&element, centred);
         self.stage
             .set_fullscreen_centre_offset(&output.name(), offset);
+
+        // A constrained cursor travels with the picture it is pinned to. It
+        // cannot follow on its own — a lock freezes it outright, and a confine
+        // only holds it against a region that has just slid out from under it —
+        // so a cursor left behind in the vacated band is a state nothing can
+        // repair: the re-pick below finds no surface there, and the leave it
+        // sends takes the constraint with it, on exactly the fullscreen games
+        // this is for. Clamped into the window as well as shifted, because the
+        // commit that earns an offset usually shrinks the window too, and a
+        // surface-local point past the new edge is no longer over the surface.
+        let pointer = self.seat.get_pointer().unwrap();
+        let constrained_here = pointer
+            .current_focus()
+            .is_some_and(|focus| focus.0 == *surface)
+            && self.pointer_constraint_active();
+        if constrained_here {
+            let moved = pointer.current_location() + (offset - stored).to_f64();
+            let origin = centred.to_f64();
+            let far = origin
+                + Point::from((
+                    (size.w as f64 - 1.0).max(0.0),
+                    (size.h as f64 - 1.0).max(0.0),
+                ));
+            pointer.set_location(Point::from((
+                moved.x.clamp(origin.x, far.x),
+                moved.y.clamp(origin.y, far.y),
+            )));
+        }
         // The picture moved under a stationary cursor, so smithay's cached focus
         // and surface origin are stale: without this the client keeps receiving
         // coordinates from where the window used to be until the user moves the
-        // mouse.
-        //
-        // Except under a pointer lock. That cursor is frozen and the client reads
-        // only relative motion, so there is no absolute position to correct — but
-        // the window moving out from under it makes the re-pick land on a
-        // different surface, which `refresh_pointer_focus`'s own lock guard does
-        // not cover (it only spares an *unchanged* focus). The leave it sends
-        // tears down the lock, on exactly the fullscreen games this is for.
-        // Confines are deliberately not covered, for the reason that guard gives:
-        // a confined cursor really moves, and suppressing the re-seat would leave
-        // it measured against a stale surface origin.
-        if !self.pointer_constraint_locked() {
-            self.refresh_pointer_focus();
-        }
+        // mouse. The cursor carried above stays over the same surface, so
+        // `refresh_pointer_focus`'s own unchanged-focus guard spares a lock from
+        // the re-seat, and a confine gets the absolute motion it really made.
+        self.refresh_pointer_focus();
     }
 
     /// How far the fullscreen window on `output` sits from the origin its park

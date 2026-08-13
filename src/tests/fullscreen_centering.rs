@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use smithay::desktop::Window;
 use smithay::output::Output;
-use smithay::utils::Point;
+use smithay::utils::{Point, Rectangle};
 
 use super::client::ClientId;
 use super::input_backend::{FakeDevice, pointer_to};
@@ -246,16 +246,18 @@ fn a_fixed_size_client_that_re_commits_its_own_size_is_still_centred() {
     f.state().exit_fullscreen_on(&output);
 }
 
-/// Centring moves the window out from under a frozen cursor, and re-picking
-/// pointer focus there lands on a different surface — the `leave` that carries
-/// tears down the lock. So the re-seat is skipped while a lock holds.
+/// Centring moves the window out from under a frozen cursor. A locked cursor
+/// cannot follow on its own, and one left in the vacated band re-picks onto no
+/// surface at all — the `leave` that carries tears the lock down. So the cursor
+/// travels the same distance the window did, and the re-seat then finds it over
+/// the surface it was already on.
 ///
-/// The cursor has to start where the centred rect will *not* reach it, which the
-/// test asserts rather than assumes: a cursor still inside the moved rect is
-/// already spared by `refresh_pointer_focus`'s own unchanged-focus guard, and
-/// would pass whether or not the skip existed.
+/// The cursor has to start where the centred rect does *not* reach it, which the
+/// test asserts rather than assumes: a cursor the move happens to leave inside
+/// the rect is already spared by `refresh_pointer_focus`'s own unchanged-focus
+/// guard, and would pass whether or not it was carried.
 #[test]
-fn centring_a_locked_game_leaves_its_lock_alone() {
+fn centring_a_locked_game_carries_the_cursor_and_keeps_its_lock() {
     let mut f = Fixture::new();
     let output = f.add_output(1, (1920, 1080));
     let id = f.add_client();
@@ -279,28 +281,210 @@ fn centring_a_locked_game_leaves_its_lock_alone() {
     f.state().enter_fullscreen(&window, Some(output.clone()));
     f.double_roundtrip(id);
     f.client(id).state.pointer_positions.clear();
+    let before = f.state().seat.get_pointer().unwrap().current_location();
 
     ack_fullscreen_at(&mut f, id, &surface, (400, 300));
 
-    let camera = f.state().camera();
-    let cursor = f.state().seat.get_pointer().unwrap().current_location();
-    let centred = f.state().stage.position_of(&window).unwrap().to_f64();
+    let centred = centred_rect(&mut f, &window);
     assert!(
-        cursor.x < centred.x || cursor.y < centred.y,
-        "precondition: the frozen cursor must fall outside the centred rect \
-         (cursor {cursor:?}, rect origin {centred:?}, camera {camera:?})"
+        !centred.contains(before),
+        "precondition: the frozen cursor must start outside the centred rect \
+         (cursor {before:?}, rect {centred:?})"
+    );
+    let cursor = f.state().seat.get_pointer().unwrap().current_location();
+    assert!(
+        centred.contains(cursor),
+        "the frozen cursor is carried along with the picture it is locked to \
+         (cursor {cursor:?}, rect {centred:?})"
     );
     assert!(
         f.state().pointer_constraint_locked(),
-        "the centring must not re-seat focus out from under a live lock"
+        "so the re-seat finds an unchanged focus and the lock survives it"
     );
     assert_eq!(
         f.client(id).state.pointer_positions,
         Vec::new(),
-        "and must not hand the locked client an absolute jump"
+        "and the locked client is handed no absolute jump"
     );
 
     f.state().exit_fullscreen_on(&output);
+}
+
+/// A confined client takes the same carry. Its cursor really moves, so unlike
+/// the locked one it is told where to — but it has to arrive *inside* the
+/// window, or the re-pick drops the confine exactly as it would a lock.
+#[test]
+fn centring_a_confined_game_carries_the_cursor_and_keeps_its_confine() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+
+    let position = f.state().stage.position_of(&window).unwrap().to_f64();
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        position + Point::from((20.0, 20.0)),
+    );
+    f.roundtrip(id);
+    let _confine = f.client(id).confine_pointer(&surface);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().pointer_constraint_active(),
+        "precondition: the confine must arm, or this scenario tests nothing"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    f.client(id).state.pointer_positions.clear();
+    let before = f.state().seat.get_pointer().unwrap().current_location();
+
+    ack_fullscreen_at(&mut f, id, &surface, (400, 300));
+    f.double_roundtrip(id);
+
+    let centred = centred_rect(&mut f, &window);
+    assert!(
+        !centred.contains(before),
+        "precondition: the cursor must start outside the centred rect \
+         (cursor {before:?}, rect {centred:?})"
+    );
+    let cursor = f.state().seat.get_pointer().unwrap().current_location();
+    assert!(
+        centred.contains(cursor),
+        "the confined cursor is carried into the window its region moved with \
+         (cursor {cursor:?}, rect {centred:?})"
+    );
+    assert!(
+        f.state().pointer_constraint_active(),
+        "so the confine survives the re-seat"
+    );
+    let local = *f
+        .client(id)
+        .state
+        .pointer_positions
+        .last()
+        .expect("a confined cursor really moved, so the client is told where to");
+    assert!(
+        (0.0..centred.size.w).contains(&local.0) && (0.0..centred.size.h).contains(&local.1),
+        "and it is told a position on the window it committed, not the one it left \
+         ({local:?} outside {:?})",
+        centred.size
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The point on the window the cursor sits on in the two scenarios below, near
+/// enough the middle of the shrunk 700x500 rect that the carry lands it well
+/// inside and the clamp never fires.
+const CURSOR_LOCAL: Point<f64, smithay::utils::Logical> = Point::new(200.0, 150.0);
+
+/// Put a locked cursor at [`CURSOR_LOCAL`] on the *parked* fullscreen window and
+/// shrink it gently, so the shifted cursor lands inside the new rect on its own.
+///
+/// The two scenarios above assert *membership*, which the clamp alone
+/// guarantees: it bounds the cursor to `[origin, origin + size - 1]`, which
+/// `Rectangle::contains` reads as inside for every input, so they hold for a
+/// carry that was dropped as much as one that ran. What the carry is for is the
+/// point on the window, and only a shift the clamp does not touch can show it.
+///
+/// 800x600 -> 700x500 on a 1920x1080 output moves the window by
+/// `((1920 - 700) / 2, (1080 - 500) / 2)` = (610, 290), so a cursor at
+/// surface-local (200, 150) travels to (810, 440) from the park — (200, 150) of
+/// the new rect, clear of all four edges. Drop the carry and the clamp drags the
+/// unshifted cursor to the rect's origin instead: surface-local (0, 0), which is
+/// still inside it, still over the same surface, and still locked.
+#[test]
+fn centring_a_gently_shrinking_game_holds_the_locked_cursor_on_the_same_point() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+
+    // Park first, then aim: the position a window is mapped at says nothing
+    // about where on it the cursor sits, and this scenario needs that exact.
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    let parked = f.state().stage.position_of(&window).unwrap().to_f64();
+    pointer_to(&mut f, &FakeDevice::mouse(), parked + CURSOR_LOCAL);
+    f.roundtrip(id);
+    let _lock = f.client(id).lock_pointer(&surface);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().pointer_constraint_active(),
+        "precondition: the lock must arm, or this scenario tests nothing"
+    );
+
+    ack_fullscreen_at(&mut f, id, &surface, (700, 500));
+
+    let centred = centred_rect(&mut f, &window);
+    assert!(
+        CURSOR_LOCAL.x < centred.size.w - 1.0 && CURSOR_LOCAL.y < centred.size.h - 1.0,
+        "precondition: the carried cursor must land clear of the clamp's far \
+         edge, or this asserts the same tautology the scenarios above do \
+         ({CURSOR_LOCAL:?} against {:?})",
+        centred.size
+    );
+    let cursor = f.state().seat.get_pointer().unwrap().current_location();
+    assert_eq!(
+        cursor - centred.loc,
+        CURSOR_LOCAL,
+        "the frozen cursor holds the point on the window it was locked over"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The same gentle shrink under a confine, where the preserved point is
+/// observable from the client: a confined cursor really moved, so it is handed
+/// the surface-local position it arrived at — which must be the one it left.
+#[test]
+fn centring_a_gently_shrinking_game_tells_a_confined_client_the_same_point() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    let parked = f.state().stage.position_of(&window).unwrap().to_f64();
+    pointer_to(&mut f, &FakeDevice::mouse(), parked + CURSOR_LOCAL);
+    f.roundtrip(id);
+    let _confine = f.client(id).confine_pointer(&surface);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().pointer_constraint_active(),
+        "precondition: the confine must arm, or this scenario tests nothing"
+    );
+    f.client(id).state.pointer_positions.clear();
+
+    ack_fullscreen_at(&mut f, id, &surface, (700, 500));
+    f.double_roundtrip(id);
+
+    let local = *f
+        .client(id)
+        .state
+        .pointer_positions
+        .last()
+        .expect("a confined cursor really moved, so the client is told where to");
+    assert_eq!(
+        local,
+        (CURSOR_LOCAL.x, CURSOR_LOCAL.y),
+        "the client is told the point its cursor was already on, not the corner \
+         a dropped carry would leave the clamp to pick"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// Where the window ended up, in canvas coordinates.
+fn centred_rect(f: &mut Fixture, window: &Window) -> Rectangle<f64, smithay::utils::Logical> {
+    let origin = f.state().stage.position_of(window).unwrap().to_f64();
+    let size = window.geometry().size;
+    Rectangle::new(origin, (size.w as f64, size.h as f64).into())
 }
 
 /// A second answer at a different size re-centres from the position the first
