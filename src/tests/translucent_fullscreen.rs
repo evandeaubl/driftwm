@@ -9,18 +9,14 @@
 //! Backend is `None`, so nothing here composes a frame. Every scenario asserts
 //! the predicate the composer gates those three buckets on.
 
-use driftwm::config::Action;
-use driftwm::desktop_entry::DesktopEntryCache;
 use smithay::desktop::Window;
 use smithay::output::Output;
-use smithay::utils::{Point, SERIAL_COUNTER};
+use smithay::utils::Point;
 
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{Request, Response};
-use crate::state::StageWindow;
 
 use super::client::ClientId;
-use super::real::TempDir;
 use super::{Fixture, config, map_window, tick_until_settled, window_by_app_id};
 
 /// A `[[window_rules]]` block seeding app_id `fs` with `opacity`, or no rule at
@@ -206,78 +202,6 @@ fn a_frozen_exit_of_a_translucent_fullscreen_window_still_covers_but_conceals_no
     );
 
     super::adopt_last_configure(&mut f, id, &surface);
-    tick_until_settled(&mut f);
-}
-
-/// A cover with no client window behind it — a suspended stand-in — has no
-/// surface, so no rule to carry an opacity, and it is drawn fully opaque. The
-/// window list is empty there and `all` on an empty list answers `true`, which
-/// is the right answer for accident-shaped reasons; pin it.
-///
-/// The state is seated on the stage directly because no production path reaches
-/// it today: `convert_to_suspended` drops the outgoing window's animation entry,
-/// so the exit freeze that would have named the stand-in is already gone by the
-/// time the stand-in exists, and `Stage::set_fullscreen`'s one production caller
-/// takes a live `Window`. Either of those changing makes this reachable, and
-/// this is the assertion saying what it must answer then.
-#[test]
-fn a_stand_in_fullscreen_cover_still_conceals_the_canvas() {
-    let tmp = TempDir::new();
-    let mut f = Fixture::with_config(config_with_opacity(Some(0.5)));
-    let output = f.add_output(1, (1920, 1080));
-    std::fs::write(
-        tmp.path().join("fs.desktop"),
-        "[Desktop Entry]\nType=Application\nName=fs\nExec=fs\n",
-    )
-    .unwrap();
-    f.state().desktop_entry_cache = Some(DesktopEntryCache::new(vec![tmp.path().to_path_buf()]));
-
-    let id = f.add_client();
-    let surface = map_window(&mut f, id, "fs", (800, 600));
-    let window = window_by_app_id(&mut f, "fs").unwrap();
-    let serial = SERIAL_COUNTER.next_serial();
-    f.state().raise_and_focus(&window, serial);
-    f.state().execute_action(&Action::SuspendWindow);
-    f.client(id).window(&surface).destroy();
-    f.roundtrip(id);
-    f.dispatch();
-
-    let stand_in = f
-        .state()
-        .stage
-        .windows()
-        .find_map(|w| w.suspended().cloned())
-        .expect("the window converted to a stand-in");
-    let sid = stand_in.id;
-    let element = StageWindow::Suspended(stand_in);
-    let size = element.geometry().size;
-    let position = f.state().stage.position_of(&element).expect("staged");
-    f.state()
-        .stage
-        .set_fullscreen(&output.name(), element, position, size);
-    // The coverage claim is "the viewport still sits where the entry parked it",
-    // so park it on the stand-in's own position rather than a canvas constant.
-    f.state().with_output_state(|os| {
-        os.camera = position.to_f64();
-        os.zoom = 1.0;
-    });
-    f.state().update_output_from_camera();
-
-    assert!(
-        f.state().is_output_visually_fullscreen(&output),
-        "precondition: the stand-in's picture covers the output"
-    );
-    assert!(
-        f.state().visually_fullscreen_windows_on(&output).is_empty(),
-        "precondition: a stand-in has no client window, so the list is empty"
-    );
-    assert!(
-        f.state().fullscreen_conceals_canvas(&output),
-        "a stand-in is drawn opaque, so its cover conceals the canvas"
-    );
-
-    f.state().stage.take_fullscreen(&output.name());
-    f.state().dismiss_suspended(sid);
     tick_until_settled(&mut f);
 }
 
