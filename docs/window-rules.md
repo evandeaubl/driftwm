@@ -117,10 +117,25 @@ Layer-shell surfaces interpret chrome fields differently — see
 ### Transparency
 
 `opacity` below 1.0 makes a window see-through, and that carries into fullscreen:
-a translucent fullscreen window shows the **canvas** behind it — wallpaper and
-canvas layers — instead of black. Panels, other windows, pinned windows and
-suspended stand-ins stay hidden, so it is a window onto the plane, not a way to
-see the rest of your desktop.
+a translucent fullscreen window shows the **canvas** behind it instead of black.
+"Canvas" means the compositor's own [`[background]`](config.md#background) —
+the built-in dot grid, your shader, or your `tile`/`wallpaper` image — plus any
+canvas layers. Everything else stays hidden: other windows, pinned windows,
+suspended stand-ins, and every layer-shell surface, panels included. It is a
+window onto the plane, not a way to see the rest of your desktop.
+
+That last part decides what a wallpaper daemon looks like through the window.
+swaybg, swww and mpvpaper paint on the `background` wlr-layer, which is a layer
+surface like any other and stays culled — so with `[background] type = "none"`
+and one of those as your wallpaper, a translucent fullscreen window still shows
+black. Point `[background]` at the image or shader instead if you want it
+visible through the window.
+
+Widgets divide along the same line, by the protocol they are built on: a widget
+that is a layer-shell surface placed at canvas coordinates rides the canvas
+layers and shows through, while a widget that is a rule-placed xdg-toplevel is a
+window and stays hidden. Two widgets that look identical on the canvas can
+differ here.
 
 ```toml
 [[window_rules]]
