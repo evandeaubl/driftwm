@@ -265,15 +265,13 @@ impl DriftWm {
                 .and_then(|s| self.find_fullscreen_output_for_surface(&s)),
         };
         let picture = FrozenPicture {
-            // A picture drawn translucent *because it is mid-transition* — an
-            // open fade still on its way up — cannot claim to cover its output:
-            // the cull behind a fullscreen cover would hide the scene while the
-            // window said to be hiding it is still see-through. Translucent
-            // because the user asked for it is the other case, and is
-            // deliberately not filtered here: a rule `opacity` keeps the
-            // coverage claim and answers to `fullscreen_conceals_canvas`
-            // instead, which uncovers the canvas alone rather than every bucket.
-            // It is still a fullscreen picture, and `bare` below says so.
+            // Translucent because it is mid-transition (an open fade still
+            // rising) cannot claim to cover its output — the cull would hide
+            // the scene while the window supposedly hiding it is still
+            // see-through. Translucent because a rule `opacity` says so is
+            // different: coverage still holds, and `fullscreen_conceals_canvas`
+            // uncovers just the canvas instead of every bucket. It is still a
+            // fullscreen picture, and `bare` below says so.
             fullscreen_on: fullscreen_output
                 .clone()
                 .filter(|_| open_fade.is_none())

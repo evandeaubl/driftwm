@@ -750,13 +750,13 @@ pub fn compose_frame(
         && !state.render.cached_tile_chunks.contains_key(&name)
         && !state.render.cached_shader_chunks.contains_key(&name)
     {
-        // Reachable while fullscreen now, which it never was before translucency:
-        // anything that drops the caches outright (config reload, scale or
-        // transform change — see `remove_background_chunks`) rebuilds them here,
-        // inside a fullscreen frame, instead of deferring the cost to the exit
-        // frame. For a gigapixel TIFF that is a whole-LOD decode and six thread
-        // spawns on a frame the user is watching a fullscreen window in. Inherent
-        // to showing the canvas through that window, not a pacing regression.
+        // Reachable while fullscreen, when the window is translucent: anything
+        // that drops the caches outright (config reload, scale or transform
+        // change — see `remove_background_chunks`) rebuilds them here, inside
+        // the fullscreen frame, instead of deferring the cost to the exit frame.
+        // For a gigapixel TIFF that is a whole-LOD decode and six thread spawns
+        // on a frame the user is watching a fullscreen window in. Inherent to
+        // showing the canvas through that window, not a pacing regression.
         let output_size = crate::state::output_logical_size(output);
         init_background(state, renderer, output_size, &name);
         did_init_bg = true;
