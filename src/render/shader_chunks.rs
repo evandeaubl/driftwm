@@ -151,10 +151,12 @@ impl ShaderChunkCache {
     /// instead of baking a cold cache.
     ///
     /// Retaining bakes across fullscreen is only safe because `bake_px` is fixed
-    /// at construction from the output scale, and every scale or transform
-    /// change routes through `RenderCache::remove_output`, which drops the whole
-    /// cache. A path that changed scale without going through it would leave a
-    /// stale-resolution cover on screen.
+    /// at construction from the output scale, and on udev every scale or
+    /// transform change routes through `RenderCache::remove_output`, which drops
+    /// the whole cache. The winit backend does not: its `Resized` arm installs a
+    /// new mode and fractional scale without dropping the cache, so a nested
+    /// session moved between displays of different DPI keeps a stale-resolution
+    /// cover.
     pub fn shrink(&mut self) {
         if self.shrunk {
             return;
