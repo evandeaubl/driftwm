@@ -867,7 +867,12 @@
 # #                they all sample, so a screenful of frost doesn't multiply the
 # #                work. Results are cached, and recomputed when the view moves
 # #                or the content behind the window changes.
-# #   opacity    — 0.0–1.0: window transparency (default: 1.0, fully opaque)
+# #   opacity    — 0.0–1.0: window transparency (default: 1.0, fully opaque).
+# #                Below 1.0 a fullscreen window shows the canvas behind it
+# #                instead of black: the wallpaper and canvas layers keep
+# #                drawing under it, though panels and other windows stay
+# #                hidden. Costs that output its direct scan-out for as long
+# #                as the window is fullscreen, so leave games opaque.
 # #   border_width         — per-window border width override (px). Set to 0 to
 # #                          disable border on a window even when [decorations]
 # #                          border_width > 0. Ignored for decoration = "none".

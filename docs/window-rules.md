@@ -114,6 +114,25 @@ semantics guide; the reference is the field dictionary.
 Layer-shell surfaces interpret chrome fields differently — see
 [Layer-shell surfaces](#layer-shell-surfaces) below.
 
+### Transparency
+
+`opacity` below 1.0 makes a window see-through, and that carries into fullscreen:
+a translucent fullscreen window shows the **canvas** behind it — wallpaper and
+canvas layers — instead of black. Panels, other windows, pinned windows and
+suspended stand-ins stay hidden, so it is a window onto the plane, not a way to
+see the rest of your desktop.
+
+```toml
+[[window_rules]]
+app_id  = "mpv"
+opacity = 0.85
+```
+
+It holds across the fullscreen transitions too, and `driftwm msg opacity` changes
+it live on a window that is already fullscreen. The trade: while a translucent
+window is fullscreen, that output loses direct scan-out, because the compositor
+has to compose the canvas under it every frame. Leave games opaque.
+
 ### Screen-pinned windows
 
 `pinned_to_screen = true` lifts a window out of the infinite canvas and fixes it
