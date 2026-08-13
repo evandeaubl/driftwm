@@ -516,6 +516,38 @@ impl DriftWm {
             && self.camera_parked_on(output, &entry.window, entry.centre_offset)
     }
 
+    /// Whether that fullscreen picture also *hides* the canvas under it. A window
+    /// carrying a rule `opacity` below 1.0 is drawn see-through, so culling the
+    /// canvas behind it would show the clear color through the window instead of
+    /// the plane it floats on. Only the canvas comes back — layer surfaces, other
+    /// windows and pinned ones stay culled on the coverage predicate above.
+    ///
+    /// The short-circuit order is load-bearing, not stylistic:
+    /// [`Self::background_render_eligible_outputs`] calls this on udev's idle fast
+    /// path, and `applied_rule` takes a surface-state lock and clones the rule, so
+    /// coverage goes first and the lock is only taken for an output that is
+    /// actually fullscreen (0-2 windows).
+    ///
+    /// An empty window list means the cover is a suspended stand-in — it has no
+    /// client surface to carry a rule and is drawn at alpha 1.0 — so `all` on
+    /// empty answering `true` is the right answer, not an accident.
+    ///
+    /// Un-culling costs that output its direct scan-out for as long as the
+    /// translucent window is up: the background joins the window on smithay's
+    /// primary plane, which is the same one-element rule `clear_color_for`
+    /// records. That is the trade the rule buys, opted into per window.
+    pub(crate) fn fullscreen_conceals_canvas(&self, output: &Output) -> bool {
+        self.is_output_visually_fullscreen(output)
+            && self.visually_fullscreen_windows_on(output).iter().all(|w| {
+                w.wl_surface()
+                    .as_deref()
+                    .and_then(driftwm::config::applied_rule)
+                    .and_then(|r| r.opacity)
+                    .unwrap_or(1.0)
+                    >= 1.0
+            })
+    }
+
     /// Whether `output`'s viewport still sits where `window`'s fullscreen entry
     /// parked it. The window is mapped at that camera origin at zoom 1, plus the
     /// `centre_offset` a smaller-than-output commit earned it, so a drifted

@@ -1324,8 +1324,9 @@ impl DriftWm {
                 "cached_shader_chunks",
                 self.render.cached_shader_chunks.len(),
             ),
-            // Both stay at 0 for a fullscreen output: pending work there keeps
-            // the udev scheduler marking it dirty every vblank.
+            // Both stay at 0 for a fullscreen output that conceals its canvas:
+            // pending work there keeps the udev scheduler marking it dirty every
+            // vblank.
             (
                 "bg_chunk_loads_in_flight",
                 self.render

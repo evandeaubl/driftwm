@@ -154,20 +154,22 @@ impl DriftWm {
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs_f64(1.0 / fps as f64))
     }
 
-    /// Outputs whose animated background can actually render: active, not
-    /// visually fullscreen, not DPMS-off. Fullscreen and DPMS-off outputs stop
-    /// rendering the background, so their `background_last_animate` stamps
-    /// go stale and would otherwise read as permanently due. A fullscreen-entry
-    /// transition keeps its canvas visible until the window covers it, so its
-    /// background stays eligible for that short interval — unless the fullscreen
-    /// it is growing into is being handed over by a window whose exit freeze is
-    /// still hiding the output, in which case nothing was uncovered. Shared by the idle
-    /// due-check, the tick-timer arming wait, and the per-frame dirty-marking so
-    /// all three agree on which outputs count.
+    /// Outputs whose animated background can actually render: active, canvas not
+    /// concealed by a fullscreen window, not DPMS-off. Concealed and DPMS-off
+    /// outputs stop rendering the background, so their `background_last_animate`
+    /// stamps go stale and would otherwise read as permanently due. A
+    /// fullscreen-entry transition keeps its canvas visible until the window
+    /// covers it, so its background stays eligible for that short interval —
+    /// unless the fullscreen it is growing into is being handed over by a window
+    /// whose exit freeze is still hiding the output, in which case nothing was
+    /// uncovered. A translucent fullscreen window never conceals, so its output
+    /// stays eligible throughout, or the wallpaper it shows through would be
+    /// drawn frozen. Shared by the idle due-check, the tick-timer arming wait,
+    /// and the per-frame dirty-marking so all three agree on which outputs count.
     pub(crate) fn background_render_eligible_outputs(&self) -> impl Iterator<Item = &Output> {
-        self.active_outputs.iter().filter(|o| {
-            !self.is_output_visually_fullscreen(o) && !self.dpms_off_outputs.contains(o)
-        })
+        self.active_outputs
+            .iter()
+            .filter(|o| !self.fullscreen_conceals_canvas(o) && !self.dpms_off_outputs.contains(o))
     }
 
     /// Owned-name variant of [`Self::background_render_eligible_outputs`] for

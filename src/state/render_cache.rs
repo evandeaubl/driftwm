@@ -144,10 +144,11 @@ impl RenderCache {
         self.cached_shader_chunks.remove(output_name);
     }
 
-    /// Free the bulk of the chunk caches while a fullscreen window occludes the
+    /// Free the bulk of the chunk caches while a fullscreen window conceals the
     /// canvas, keeping the never-blank cover plane and (TIFF) the decoder pool.
-    /// The caches stay in their maps, so there is no rebuild on the exit frame —
-    /// which is where the cost of destroying them lands.
+    /// The caches stay in their maps, so the frame that uncovers the canvas — an
+    /// exit, or the window's opacity dropping below 1.0 — has no rebuild to pay
+    /// for, which is where the cost of destroying them lands.
     pub fn shrink_background_for_fullscreen(&mut self, output_name: &str) {
         if let Some(cache) = self.cached_tile_chunks.get_mut(output_name) {
             cache.shrink();

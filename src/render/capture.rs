@@ -103,7 +103,7 @@ pub fn render_screencopy(
     let output_mode_size = output.current_mode().unwrap().size;
     // Same predicate `compose_frame` culled the canvas on, read from the same
     // unticked state, so the clear agrees with the elements it is clearing for.
-    let opaque_clear = state.is_output_visually_fullscreen(output);
+    let opaque_clear = state.fullscreen_conceals_canvas(output);
 
     for screencopy in pending {
         let size = screencopy.buffer_size();
@@ -464,7 +464,7 @@ pub fn render_capture_frames(
     let output_transform = output.current_transform();
     let output_mode_size = output.current_mode().unwrap().size;
     let capture_key = format!("cap:{}", output.name());
-    let opaque_clear = state.is_output_visually_fullscreen(output);
+    let opaque_clear = state.fullscreen_conceals_canvas(output);
 
     let fail_reason = smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server::ext_image_copy_capture_frame_v1::FailureReason::Unknown;
 

@@ -733,13 +733,18 @@ pub fn compose_frame(
     } else {
         Vec::new()
     };
+    // The canvas alone answers to a second predicate: a fullscreen window drawn
+    // translucent by its rule `opacity` still covers the output, but you see the
+    // plane through it, so the background, the canvas layers and the outlines
+    // stay drawn under it. Everything else keeps culling on coverage.
+    let fullscreen_conceals = state.fullscreen_conceals_canvas(output);
     let mut did_init_bg = false;
-    if output_fullscreen {
-        // Fullscreen fully occludes the canvas: free the bulk of its chunk
-        // caches and skip the background. Shrunk rather than removed, so the
-        // branch below stays unreachable for this output and the exit frame has
-        // no synchronous rebuild to pay for. Maximize is NOT fullscreen, so it
-        // keeps its background.
+    if fullscreen_conceals {
+        // A concealing fullscreen picture hides the canvas: free the bulk of its
+        // chunk caches and skip the background. Shrunk rather than removed, so
+        // the caches stay in their maps and the frame that uncovers the canvas —
+        // an exit, or an opacity drop — has no synchronous rebuild to pay for.
+        // Maximize is NOT fullscreen, so it keeps its background.
         state.render.shrink_background_for_fullscreen(&name);
     } else if !state.render.cached_bg.contains_key(&name)
         && !state.render.cached_tile_chunks.contains_key(&name)
@@ -1599,20 +1604,25 @@ pub fn compose_frame(
     #[cfg(feature = "profile-with-tracy")]
     drop(_windows_span);
 
-    // Both sit below the windows, so the fullscreen window fully occludes them.
-    let canvas_layer_elements = if output_fullscreen {
+    // All three sit below the windows, so a fullscreen window occludes them
+    // unless it is translucent enough to see the canvas through. A widget riding
+    // this bucket comes back with it while one written as a rule-placed toplevel
+    // stays culled with every other window — two identical-looking widgets split
+    // by protocol. Accepted: drawing toplevels through a fullscreen window is a
+    // separate feature.
+    let canvas_layer_elements = if fullscreen_conceals {
         Vec::new()
     } else {
         build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect)
     };
 
-    let outline_elements = if output_fullscreen {
+    let outline_elements = if fullscreen_conceals {
         Vec::new()
     } else {
         build_output_outline_elements(state, renderer, output, camera, zoom, viewport_size)
     };
 
-    let bg_elements: Vec<OutputRenderElements> = if output_fullscreen {
+    let bg_elements: Vec<OutputRenderElements> = if fullscreen_conceals {
         vec![]
     } else if let Some(cache) = state.render.cached_shader_chunks.get_mut(&output.name()) {
         cache
@@ -1856,7 +1866,10 @@ fn build_output_outline_elements(
         }
         // A fullscreen output shows a screen-space window, not a canvas
         // viewport, so it has no outline to project onto other monitors (once
-        // the fullscreen-entry transition has covered the canvas).
+        // the fullscreen-entry transition has covered the canvas). Coverage, not
+        // concealment: a translucent fullscreen output draws its neighbours'
+        // outlines but still projects none of its own, because a canvas showing
+        // through a window is not a viewport worth pointing at.
         if state.is_output_visually_fullscreen(other) {
             continue;
         }

@@ -323,7 +323,8 @@ impl ShaderChunkCache {
         #[cfg(feature = "profile-with-tracy")]
         let _span = tracy_client::span!("ShaderChunkCache::render_elements");
 
-        // Only reached off fullscreen, so the next entry has a fresh shrink to do.
+        // Only reached on a frame that draws the canvas, so the next shrink has
+        // fresh work to do.
         self.shrunk = false;
         self.frame_counter = self.frame_counter.wrapping_add(1);
         let frame = self.frame_counter;
