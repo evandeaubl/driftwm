@@ -19,7 +19,7 @@
         wayland
         wayland-protocols
         seatd # libseat
-        libdisplay-info
+        libdisplay-info_0_3
         libinput
         libgbm
         libxkbcommon
@@ -37,7 +37,7 @@
       runtimeLibsFor = pkgs: with pkgs; [
         wayland
         seatd
-        libdisplay-info
+        libdisplay-info_0_3
         libinput
         libgbm
         libxkbcommon
